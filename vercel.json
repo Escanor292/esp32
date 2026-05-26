@@ -9,7 +9,7 @@
       "src": "dashboard/package.json",
       "use": "@vercel/static-build",
       "config": {
-        "distDir": "dashboard/build"
+        "distDir": "build"
       }
     }
   ],
@@ -23,8 +23,16 @@
       "dest": "/server.js"
     },
     {
-      "src": "/(.*)",
+      "src": "/static/(.*)",
+      "dest": "/dashboard/build/static/$1"
+    },
+    {
+      "src": "/(.*\\.(js|css|ico|png|jpg|jpeg|svg|json))",
       "dest": "/dashboard/build/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/dashboard/build/index.html"
     }
   ]
 }
