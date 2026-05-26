@@ -468,6 +468,22 @@ wss.on('connection', (ws) => {
 
 // ============ REST API ENDPOINTS ============
 
+// Root endpoint - Welcome message
+app.get('/', (req, res) => {
+  res.json({
+    message: '🎉 ESP32 Payment Notification System API',
+    version: '1.0.0',
+    status: 'running',
+    endpoints: {
+      dashboard: '/api/v1/dashboard',
+      devices: '/api/v1/devices',
+      orders: '/api/v1/orders',
+      webhook: '/sepay-webhook'
+    },
+    documentation: 'https://github.com/Escanor292/esp32'
+  });
+});
+
 // 0. SePay Webhook
 app.post('/sepay-webhook', async (req, res) => {
   try {
