@@ -1,38 +1,11 @@
 {
-  "version": 2,
-  "builds": [
+  "buildCommand": "cd dashboard && npm install && npm run build",
+  "outputDirectory": "dashboard/build",
+  "framework": null,
+  "rewrites": [
     {
-      "src": "server.js",
-      "use": "@vercel/node"
-    },
-    {
-      "src": "dashboard/package.json",
-      "use": "@vercel/static-build",
-      "config": {
-        "distDir": "build"
-      }
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/v1/(.*)",
-      "dest": "server.js"
-    },
-    {
-      "src": "/sepay-webhook",
-      "dest": "server.js"
-    },
-    {
-      "src": "/static/(.*)",
-      "dest": "dashboard/build/static/$1"
-    },
-    {
-      "src": "/(.*\\.(js|css|json|ico|png|jpg|svg|txt))",
-      "dest": "dashboard/build/$1"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "dashboard/build/index.html"
+      "source": "/api/:path*",
+      "destination": "/api/index.js"
     }
   ]
 }
