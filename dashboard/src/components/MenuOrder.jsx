@@ -1,8 +1,8 @@
 import React, { useState, useCallback } from 'react';
 import {
-  Box, Grid, Typography, Card, CardContent, CardMedia, CardActionArea,
+  Box, Grid, Typography, Card, CardContent, CardActionArea,
   IconButton, Button, Chip, Divider, Paper, Dialog, DialogContent,
-  DialogTitle, DialogActions, Snackbar, Alert, Badge, Tooltip
+  DialogTitle, DialogActions, Snackbar, Alert, Badge
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';

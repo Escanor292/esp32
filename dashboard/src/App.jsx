@@ -11,7 +11,6 @@ import HistoryIcon from '@mui/icons-material/History';
 import QrCode2Icon from '@mui/icons-material/QrCode2';
 import BarChartIcon from '@mui/icons-material/BarChart';
 
-import RevenueCard from './components/RevenueCard';
 import DeviceStatus from './components/DeviceStatus';
 import TransactionHistory from './components/TransactionHistory';
 import GenerateQRCode from './components/GenerateQRCode';

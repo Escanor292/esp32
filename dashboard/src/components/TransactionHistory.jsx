@@ -19,7 +19,10 @@ function TransactionHistory() {
   );
   const [dateTo, setDateTo] = useState(new Date().toISOString().split('T')[0]);
 
-  useEffect(() => { fetchAll(); }, []);
+  useEffect(() => { 
+    fetchAll(); 
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);

@@ -4,7 +4,6 @@ import {
   Button, Box, Typography, Divider, Chip
 } from '@mui/material';
 import PrintIcon from '@mui/icons-material/Print';
-import DownloadIcon from '@mui/icons-material/Download';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 
 const fmt = (n) => (n || 0).toLocaleString('vi-VN');

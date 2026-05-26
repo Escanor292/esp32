@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box, Grid, Typography, Paper, Card, CardContent,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-  ToggleButton, ToggleButtonGroup, CircularProgress, Chip,
+  ToggleButton, ToggleButtonGroup, Chip,
   LinearProgress, Tooltip
 } from '@mui/material';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
