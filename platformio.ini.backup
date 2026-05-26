@@ -1,0 +1,35 @@
+[env:esp32dev]
+platform = espressif32
+board = esp32dev
+framework = arduino
+
+; Cấu hình Serial Monitor
+monitor_speed = 115200
+monitor_filters = esp32_exception_decoder
+
+; Cấu hình upload
+upload_speed = 921600
+
+; Thư viện cần thiết
+lib_deps = 
+    dfrobot/DFRobotDFPlayerMini@^1.0.6
+    adafruit/Adafruit SSD1306@^2.5.7
+    adafruit/Adafruit GFX Library@^1.11.9
+    plerup/EspSoftwareSerial@^8.1.0
+
+; Cấu hình lọc file
+src_filter = +<main.cpp>
+
+; Cấu hình build
+build_flags = 
+    -DCORE_DEBUG_LEVEL=3
+    -DBOARD_HAS_PSRAM
+    
+; Cấu hình partition (nếu cần)
+board_build.partitions = huge_app.csv
+
+; Cấu hình WiFi debug (tùy chọn)
+; build_flags = 
+;     ${env.build_flags}
+;     -DDEBUG_ESP_WIFI
+;     -DDEBUG_ESP_HTTP_CLIENT

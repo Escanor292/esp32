@@ -1,0 +1,47 @@
+{
+  "devices": [
+    {
+      "id": "store_001",
+      "location_name": "Quầy Thu Ngân 1",
+      "status": "offline",
+      "last_heartbeat": null,
+      "config": {
+        "model": "ESP32-DevKit"
+      },
+      "created_at": "2026-05-26T03:23:10.540Z"
+    }
+  ],
+  "transactions": [
+    {
+      "id": "311538f1-e56d-4ab2-85a7-67aace0372c3",
+      "device_id": "store_001",
+      "transaction_code": "FT123456",
+      "amount": 50000,
+      "status": "confirmed",
+      "expires_at": null,
+      "confirmed_at": "2026-05-26T03:24:48.074Z",
+      "created_at": "2026-05-26T03:24:48.074Z"
+    }
+  ],
+  "notification_queue": [],
+  "orders": [
+    {
+      "id": "7bfa6c68-3946-41f4-8257-4a3a0c37f6e5",
+      "transaction_code": "ORDER_MPM464WO",
+      "store_name": "Quán Cà Phê",
+      "items": [
+        {
+          "name": "Bạc xỉu",
+          "price": 32000,
+          "quantity": 4
+        }
+      ],
+      "subtotal": 128000,
+      "vat": 12800,
+      "total": 140800,
+      "status": "pending",
+      "confirmed_at": null,
+      "created_at": "2026-05-26T04:07:09.144Z"
+    }
+  ]
+}

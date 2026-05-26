@@ -1,0 +1,188 @@
+SƠ ĐỒ KẾT NỐI ESP32 - DFPLAYER - PAM8403 - OLED
+===================================================
+Cập nhật: 2026-05-26
+
+TỔNG QUAN HỆ THỐNG:
+Nguồn USB → cổng USB ESP32 → 5V pin → DFPlayer VCC / PAM8403 VCC
+                            → 3V3 pin → OLED VCC
+                            → GPIO17 TX2 → [1kΩ] → DFPlayer RX/PX
+                            ← GPIO16 RX2 ← DFPlayer TX
+                            → GPIO22 SCL → OLED SCL
+                            → GPIO21 SDA → OLED SDA
+DFPlayer DAC_R → PAM8403 R IN → PAM8403 R OUT+/- → Loa 8Ω 3W
+Tụ 1000uF (+) → ESP32 5V | Tụ 1000uF (-) → ESP32 GND
+
+=====================================================
+CHI TIẾT KẾT NỐI TỪNG PHẦN
+=====================================================
+
+[ NGUỒN ĐIỆN ]
+─────────────────────────────────────────────────────
+  Nguồn USB (5V/2A)
+      │
+      └─── Cắm vào cổng USB của ESP32
+                │
+                ├─── ESP32 5V  ──────┬──► DFPlayer VCC
+                │                   ├──► PAM8403 VCC
+                │                   └──► Tụ 1000uF chân (+)
+                │
+                ├─── ESP32 3V3 ──────►  OLED VCC
+                │
+                └─── ESP32 GND ──────┬──► DFPlayer GND
+                                     ├──► PAM8403 GND
+                                     ├──► OLED GND
+                                     └──► Tụ 1000uF chân (-)
+
+[ UART - ESP32 ↔ DFPlayer ]
+─────────────────────────────────────────────────────
+  ESP32 GPIO17 (TX2) ──[Điện trở 1kΩ]──► DFPlayer RX/PX
+  ESP32 GPIO16 (RX2) ◄────────────────── DFPlayer TX
+
+[ I2C - ESP32 ↔ OLED ]
+─────────────────────────────────────────────────────
+  ESP32 GPIO22 ──────────────────────► OLED SCL
+  ESP32 GPIO21 ──────────────────────► OLED SDA
+
+[ AUDIO - DFPlayer → PAM8403 → Loa ]
+─────────────────────────────────────────────────────
+  DFPlayer DAC_R ────────────────────► PAM8403 R IN
+  DFPlayer GND   ────────────────────► PAM8403 GND
+
+  PAM8403 R OUT+ ────────────────────► Loa (+)
+  PAM8403 R OUT- ────────────────────► Loa (-)
+
+[ TỤ LỌC NGUỒN ]
+─────────────────────────────────────────────────────
+  Tụ 1000uF (16V 8x16mm):
+    Chân (+)  ─────────────────────── ESP32 5V
+    Chân (-)  ─────────────────────── ESP32 GND
+
+=====================================================
+SƠ ĐỒ CHÂN (PINOUT)
+=====================================================
+
+                    ┌─────────────────────┐
+        Nguồn USB ──┤ USB            3V3  ├──► OLED VCC
+                    │                     │
+               GND ─┤ GND             5V  ├──┬─► DFPlayer VCC
+                    │                     │  ├─► PAM8403 VCC
+          GPIO16 RX2┤ RX2            GPIO ├  └─► Tụ (+)
+          GPIO17 TX2┤ TX2            GPIO ├
+          GPIO21 SDA┤ SDA            GPIO ├
+          GPIO22 SCL┤ SCL            GPIO ├
+                    └─────────────────────┘
+
+  DFPlayer Mini MP3-TF-16P:
+  ┌─────────────┐
+  │ VCC   ◄─── ESP32 5V
+  │ PX/RX ◄─── [1kΩ] ◄── ESP32 GPIO17
+  │ TX    ───► ESP32 GPIO16
+  │ DAC_R ───► PAM8403 R IN
+  │ GND   ◄─── ESP32 GND / PAM8403 GND
+  └─────────────┘
+
+  PAM8403 Amplifier:
+  ┌─────────────┐
+  │ VCC   ◄─── ESP32 5V
+  │ GND   ◄─── ESP32 GND / DFPlayer GND
+  │ R IN  ◄─── DFPlayer DAC_R
+  │ R OUT+───► Loa (+)
+  │ R OUT-───► Loa (-)
+  └─────────────┘
+
+  OLED 0.96" I2C 128x64:
+  ┌─────────────┐
+  │ VCC   ◄─── ESP32 3V3
+  │ GND   ◄─── ESP32 GND
+  │ SCL   ◄─── ESP32 GPIO22
+  │ SDA   ◄─── ESP32 GPIO21
+  └─────────────┘
+
+  Loa ZIQQUCU 8Ω 3W Oval:
+  ┌─────────────┐
+  │ (+)   ◄─── PAM8403 R OUT+
+  │ (-)   ◄─── PAM8403 R OUT-
+  └─────────────┘
+
+=====================================================
+BẢNG KẾT NỐI TỔNG HỢP
+=====================================================
+
+  ESP32 PIN   │ KẾT NỐI VỚI          │ GHI CHÚ
+  ────────────┼───────────────────────┼─────────────────────
+  USB (cổng)  │ Nguồn USB 5V/2A      │ Cấp nguồn toàn hệ thống
+  5V          │ DFPlayer VCC          │ Nguồn 5V cho DFPlayer
+  5V          │ PAM8403 VCC           │ Nguồn 5V cho khuếch đại
+  5V          │ Tụ 1000uF chân (+)   │ Lọc nguồn
+  3V3         │ OLED VCC              │ Nguồn 3.3V cho màn hình
+  GND         │ DFPlayer GND          │ Mass chung
+  GND         │ PAM8403 GND           │ Mass chung
+  GND         │ OLED GND              │ Mass chung
+  GND         │ Tụ 1000uF chân (-)   │ Mass chung
+  GPIO13      │ Chân 1 của Nút Nhấn   │ Nhấn giữ 3 giây để reset WiFi
+  GND         │ Chân 2 của Nút Nhấn   │ Nối đất cho nút nhấn
+  GPIO16 RX2  │ DFPlayer TX           │ Nhận dữ liệu từ DFPlayer
+  GPIO17 TX2  │ [1kΩ] → DFPlayer PX  │ Gửi lệnh đến DFPlayer
+  GPIO21 SDA  │ OLED SDA              │ I2C Data
+  GPIO22 SCL  │ OLED SCL              │ I2C Clock
+
+  DFPlayer PIN│ KẾT NỐI VỚI          │ GHI CHÚ
+  ────────────┼───────────────────────┼─────────────────────
+  VCC         │ ESP32 5V              │ Nguồn cấp
+  GND         │ ESP32 GND             │ Mass chung + PAM8403 GND
+  RX/PX       │ [1kΩ] ← ESP32 GPIO17 │ Nhận lệnh (có điện trở)
+  TX          │ ESP32 GPIO16          │ Gửi trạng thái
+  DAC_R       │ PAM8403 R IN          │ Tín hiệu audio kênh phải
+
+  PAM8403 PIN │ KẾT NỐI VỚI          │ GHI CHÚ
+  ────────────┼───────────────────────┼─────────────────────
+  VCC         │ ESP32 5V              │ Nguồn cấp
+  GND         │ ESP32 GND             │ Mass chung
+  R IN        │ DFPlayer DAC_R        │ Tín hiệu vào kênh phải
+  R OUT+      │ Loa (+)               │ Đầu ra loa dương
+  R OUT-      │ Loa (-)               │ Đầu ra loa âm
+
+=====================================================
+LƯU Ý QUAN TRỌNG
+=====================================================
+
+  1. NGUỒN:
+     - USB cắm trực tiếp vào cổng USB của ESP32 (không phải VIN)
+     - ESP32 tự điều tiết 5V → 3.3V nội bộ
+     - Chân 5V trên ESP32 lấy thẳng từ USB (không qua regulator)
+     - Dùng nguồn USB ≥ 2A để đủ cho toàn hệ thống
+
+  2. ĐIỆN TRỞ 1kΩ:
+     - BẮT BUỘC trên đường TX2 (GPIO17) → DFPlayer RX/PX
+     - Bảo vệ DFPlayer khỏi mức logic 3.3V của ESP32
+     - Có thể dùng 470Ω đến 2.2kΩ
+
+  3. TỤ ĐIỆN 1000uF / 16V:
+     - Kết nối song song với nguồn 5V
+     - Lọc nhiễu, ổn định điện áp khi PAM8403 hoạt động
+     - CHÚ Ý CỰC TÍNH: chân dài = (+), vạch sọc = (-)
+
+  4. ÂM THANH MONO:
+     - Chỉ dùng DAC_R của DFPlayer và kênh R của PAM8403
+     - 1 loa duy nhất kết nối R OUT+ và R OUT-
+
+  5. OLED:
+     - Dùng 3V3 (không dùng 5V) để bảo vệ màn hình
+     - Địa chỉ I2C: 0x3C (mặc định)
+
+  6. CHUẨN BỊ THẺ SD:
+     - Format: FAT32
+     - Tạo thư mục: /mp3/
+     - Đặt tên file: 0001.mp3, 0002.mp3, ...
+     - Hỗ trợ: 1GB - 128GB
+
+=====================================================
+TIÊU THỤ ĐIỆN ƯỚC TÍNH
+=====================================================
+  ESP32 (WiFi on)  : ~80 mA
+  DFPlayer (play)  : ~200 mA
+  PAM8403 (3W)     : ~500 mA
+  OLED             : ~20 mA
+  ─────────────────────────
+  Tổng ước tính    : ~800 mA - 1A
+  → Yêu cầu nguồn  : USB 5V / 2A trở lên
