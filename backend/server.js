@@ -39,11 +39,66 @@ const mqttClient = mqtt.connect(MQTT_BROKER_URL, {
 
 mqttClient.on('connect', () => {
   console.log('✅ Connected to MQTT Broker');
+  // Subscribe to device heartbeats
+  mqttClient.subscribe(`payment/+/heartbeat`, (err) => {
+    if (!err) {
+      console.log('📡 Subscribed to MQTT heartbeats: payment/+/heartbeat');
+    }
+  });
 });
 
 mqttClient.on('error', (error) => {
   console.error('❌ MQTT Error:', error);
 });
+
+// Handle incoming MQTT messages (like heartbeats)
+mqttClient.on('message', async (topic, message) => {
+  try {
+    if (topic.endsWith('/heartbeat')) {
+      const payload = JSON.parse(message.toString());
+      const deviceId = payload.device_id;
+      if (deviceId) {
+        await updateDeviceStatus(deviceId, 'online');
+        // If in fallback mode, update fallback last_heartbeat immediately
+        if (useFallback) {
+          const device = dbFallback.devices.find(d => d.id === deviceId);
+          if (device) {
+            device.status = 'online';
+            device.last_heartbeat = new Date().toISOString();
+            saveFallback();
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error processing MQTT message:', err);
+  }
+});
+
+// Background task: Check for inactive devices (offline check every 10s)
+setInterval(async () => {
+  try {
+    const threshold = new Date(Date.now() - 35000); // 35 seconds of silence
+    if (useFallback) {
+      let changed = false;
+      dbFallback.devices.forEach(d => {
+        if (d.status === 'online' && d.last_heartbeat && new Date(d.last_heartbeat) < threshold) {
+          d.status = 'offline';
+          changed = true;
+          console.log(`⚠️ Device ${d.id} went offline (heartbeat timeout)`);
+        }
+      });
+      if (changed) saveFallback();
+    } else {
+      await pool.query(
+        "UPDATE devices SET status = 'offline' WHERE status = 'online' AND last_heartbeat < $1",
+        [threshold]
+      );
+    }
+  } catch (err) {
+    console.error('Error running offline check:', err);
+  }
+}, 10000);
 
 // ============ EXPRESS SETUP ============
 const app = express();
@@ -86,7 +141,9 @@ const DB_FALLBACK_FILE = path.join(__dirname, 'db_fallback.json');
 let useFallback = false;
 let dbFallback = {
   devices: [
-    { id: 'store_001', location_name: 'Quầy Thu Ngân 1', status: 'offline', last_heartbeat: null, config: { model: 'ESP32-DevKit' }, created_at: new Date().toISOString() }
+    { id: 'store_001', location_name: 'Quầy Thu Ngân 1', status: 'offline', last_heartbeat: null, config: { model: 'ESP32-DevKit' }, created_at: new Date().toISOString() },
+    { id: 'store_002', location_name: 'Quầy Pha Chế 2', status: 'offline', last_heartbeat: null, config: { model: 'ESP32-DevKit' }, created_at: new Date().toISOString() },
+    { id: 'store_003', location_name: 'Quầy Mang Về (Takeaway)', status: 'offline', last_heartbeat: null, config: { model: 'ESP32-DevKit' }, created_at: new Date().toISOString() }
   ],
   transactions: [],
   notification_queue: [],

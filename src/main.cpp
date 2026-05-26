@@ -286,10 +286,19 @@ void loop() {
   // Update LED status
   updateLEDStatus();
   
-  // Send heartbeat every 30 seconds
-  if (millis() - lastHeartbeat > 30000) {
+  // Send heartbeat every 15 seconds
+  if (millis() - lastHeartbeat > 15000) {
     lastHeartbeat = millis();
     Serial.println("Heartbeat - System online");
+    if (mqttClient.connected()) {
+      StaticJsonDocument<128> doc;
+      doc["device_id"] = STORE_ID;
+      doc["status"] = "online";
+      char buffer[128];
+      serializeJson(doc, buffer);
+      mqttClient.publish("payment/store_001/heartbeat", buffer);
+      Serial.println("✅ Heartbeat sent to MQTT");
+    }
   }
   
   delay(100);

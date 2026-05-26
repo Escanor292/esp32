@@ -70,4 +70,7 @@ dashboard/.env
 dashboard/build/
 
 # Backend production files
-backend/dist/
+backend/dist/
+
+# Ignore all markdown documentation files
+*.md
