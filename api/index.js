@@ -1030,3 +1030,7 @@ process.on('SIGTERM', async () => {
     process.exit(0);
   });
 });
+
+
+// Export app for Vercel serverless
+module.exports = app;
