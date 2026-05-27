@@ -9,7 +9,6 @@ import {
   CircularProgress,
   Alert,
 } from '@mui/material';
-import QRCode from 'qrcode.react';
 import DownloadIcon from '@mui/icons-material/Download';
 import PrintIcon from '@mui/icons-material/Print';
 import api from '../services/api';

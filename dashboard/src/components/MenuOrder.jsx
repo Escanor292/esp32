@@ -10,7 +10,6 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import QrCode2Icon from '@mui/icons-material/QrCode2';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import QRCode from 'qrcode.react';
 import api from '../services/api';
 
 // ============ MENU DATA ============
