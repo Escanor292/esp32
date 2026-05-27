@@ -29,7 +29,47 @@ const SEPAY_API_KEY = process.env.SEPAY_API_KEY || 'your_sepay_api_key';
 const MQTT_BROKER_URL = process.env.MQTT_BROKER_URL || 'mqtt://broker.hivemq.com:1883';
 const STORE_ID = process.env.STORE_ID || 'store_001';
 
-// ============ MQTT CLIENT ============
+// ============ MQTT HELPER FUNCTION (for Vercel Serverless) ============
+function publishMqttOnce(topic, payload) {
+  return new Promise((resolve, reject) => {
+    const client = mqtt.connect(MQTT_BROKER_URL, {
+      clientId: `vercel-publisher-${Date.now()}`,
+      clean: true,
+      connectTimeout: 10000,
+      reconnectPeriod: 0
+    });
+
+    const timer = setTimeout(() => {
+      client.end(true);
+      reject(new Error('MQTT connect timeout'));
+    }, 12000);
+
+    client.on('connect', () => {
+      clearTimeout(timer);
+      
+      client.publish(topic, JSON.stringify(payload), { qos: 0 }, (err) => {
+        client.end(true);
+        
+        if (err) {
+          reject(err);
+        } else {
+          resolve({
+            topic,
+            payload
+          });
+        }
+      });
+    });
+
+    client.on('error', (err) => {
+      clearTimeout(timer);
+      client.end(true);
+      reject(err);
+    });
+  });
+}
+
+// ============ MQTT CLIENT (Legacy - for backward compatibility) ============
 const mqttClient = mqtt.connect(MQTT_BROKER_URL, {
   clientId: `backend-server-${STORE_ID}`,
   clean: true,
@@ -530,51 +570,38 @@ app.get('/api/health', (req, res) => {
 });
 
 // Test MQTT endpoint
-app.post('/api/test-mqtt', (req, res) => {
-  const { amount, txnCode } = req.body;
-  
-  const testAmount = amount || 50000;
-  const testTxnCode = txnCode || `TEST_${Date.now().toString(36).toUpperCase()}`;
-  
-  const mqttMsg = { 
-    id: 'test-' + Date.now(), 
-    transferAmount: testAmount, 
-    content: testTxnCode, 
-    gateway: 'TEST', 
-    transactionDate: new Date().toISOString(), 
-    referenceCode: testTxnCode 
-  };
-  
-  const mqttTopic = `payment/${STORE_ID}/new_order`;
-  
-  if (mqttClient && mqttClient.connected) {
-    mqttClient.publish(mqttTopic, JSON.stringify(mqttMsg), { qos: 1 }, (err) => {
-      if (err) {
-        res.json({
-          success: false,
-          error: err.message,
-          mqtt: {
-            connected: mqttClient.connected,
-            topic: mqttTopic
-          }
-        });
-      } else {
-        res.json({
-          success: true,
-          message: 'MQTT message sent',
-          topic: mqttTopic,
-          payload: mqttMsg
-        });
-      }
-    });
-  } else {
+app.post('/api/test-mqtt', async (req, res) => {
+  try {
+    const amount = req.body.amount || 99000;
+    const txnCode = req.body.txnCode || `TEST_${Date.now().toString(36).toUpperCase()}`;
+    const deviceId = req.body.device_id || STORE_ID;
+    
+    const topic = `payment/${deviceId}/new_order`;
+    
+    const payload = {
+      id: `test-${Date.now()}`,
+      device_id: deviceId,
+      amount,
+      txnCode,
+      transferAmount: amount,
+      content: txnCode,
+      referenceCode: txnCode,
+      gateway: 'TEST',
+      transactionDate: new Date().toISOString()
+    };
+    
+    const result = await publishMqttOnce(topic, payload);
+    
     res.json({
+      success: true,
+      message: 'MQTT message sent successfully',
+      ...result
+    });
+  } catch (error) {
+    res.status(500).json({
       success: false,
-      error: 'MQTT client not connected',
-      mqtt: {
-        connected: mqttClient.connected,
-        broker: MQTT_BROKER_URL
-      }
+      message: 'MQTT publish failed',
+      error: error.message
     });
   }
 });
@@ -707,6 +734,7 @@ app.post('/api/v1/orders', async (req, res) => {
     // Push QR hint via MQTT so ESP32 can update its display
     const mqttMsg = { 
       id: orderId, 
+      device_id: STORE_ID,
       transferAmount: total, 
       content: txnCode, 
       gateway: 'POS', 
@@ -716,20 +744,13 @@ app.post('/api/v1/orders', async (req, res) => {
     
     const mqttTopic = `payment/${STORE_ID}/new_order`;
     
-    console.log('📤 Publishing MQTT message:');
-    console.log('   Topic:', mqttTopic);
-    console.log('   Payload:', JSON.stringify(mqttMsg));
-    
-    if (mqttClient && mqttClient.connected) {
-      mqttClient.publish(mqttTopic, JSON.stringify(mqttMsg), { qos: 1 }, (err) => {
-        if (err) {
-          console.error('❌ MQTT publish failed:', err);
-        } else {
-          console.log('✅ MQTT message published successfully');
-        }
-      });
-    } else {
-      console.error('❌ MQTT client not connected! Cannot send order to ESP32');
+    // Use publishMqttOnce for Vercel serverless
+    try {
+      await publishMqttOnce(mqttTopic, mqttMsg);
+      console.log('✅ MQTT message published successfully to', mqttTopic);
+    } catch (mqttError) {
+      console.error('❌ MQTT publish failed:', mqttError.message);
+      // Don't fail the order creation if MQTT fails
     }
 
     res.json({ success: true, order: newOrder });
