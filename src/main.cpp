@@ -796,6 +796,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   memcpy(message, payload, length);
   message[length] = '\0';
   
+  Serial.print("   Payload length: ");
+  Serial.println(length);
   Serial.print("   Payload: ");
   Serial.println(message);
   
@@ -809,8 +811,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     return;
   }
   
+  Serial.println("✅ JSON parsed successfully");
+  
   // Check topic type
   String topicStr = String(topic);
+  Serial.print("   Topic string: ");
+  Serial.println(topicStr);
   
   if (topicStr.endsWith("/new_order")) {
     // Handle new order - Display QR code
@@ -824,32 +830,58 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     
-    // Title
+    // Left side: Order info
     display.setCursor(0, 0);
-    display.println("DON HANG MOI");
-    display.drawFastHLine(0, 10, 128, SSD1306_WHITE);
+    display.println("DON HANG");
     
-    // Amount
-    display.setCursor(0, 15);
-    display.print("So tien: ");
-    display.print(amount);
+    display.setCursor(0, 12);
+    display.print("Tien:");
+    display.setCursor(0, 22);
+    // Format amount with thousand separator
+    String amountStr = String(amount);
+    if (amountStr.length() > 3) {
+      String formatted = "";
+      int count = 0;
+      for (int i = amountStr.length() - 1; i >= 0; i--) {
+        if (count > 0 && count % 3 == 0) {
+          formatted = "," + formatted;
+        }
+        formatted = amountStr[i] + formatted;
+        count++;
+      }
+      display.print(formatted);
+    } else {
+      display.print(amount);
+    }
     display.println("d");
     
-    // Transaction code
-    display.setCursor(0, 25);
-    display.print("Ma: ");
-    display.println(txnCode);
+    display.setCursor(0, 34);
+    display.println("Ma:");
+    display.setCursor(0, 44);
+    // Display only last 8 chars of transaction code
+    if (txnCode.length() > 8) {
+      display.println(txnCode.substring(txnCode.length() - 8));
+    } else {
+      display.println(txnCode);
+    }
     
-    // QR Code - Encode bank transfer info (VietQR format)
+    display.setCursor(0, 56);
+    display.println("Quet QR->");
+    
+    // Right side: QR Code (smaller, positioned better)
     // Format: Bank|Account|Amount|Content
     String qrData = String(BANK_CODE) + "|" + String(BANK_ACCOUNT) + "|" + String(amount) + "|" + txnCode;
-    displayQRCode(qrData.c_str(), 70, 35, 1);
+    displayQRCode(qrData.c_str(), 64, 0, 2);  // x=64, y=0, scale=2 (fits 64x64 pixels)
     
     display.display();
     
     Serial.println("✅ QR Code displayed on OLED");
     Serial.print("   QR Data: ");
     Serial.println(qrData);
+    Serial.print("   Amount: ");
+    Serial.println(amount);
+    Serial.print("   Transaction Code: ");
+    Serial.println(txnCode);
     
     // Auto return to idle after 30 seconds
     delay(30000);
