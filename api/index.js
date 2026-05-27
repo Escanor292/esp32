@@ -491,6 +491,16 @@ app.get('/', (req, res) => {
   });
 });
 
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({
+    ok: true,
+    message: 'API running on Vercel',
+    timestamp: new Date().toISOString(),
+    environment: process.env.VERCEL ? 'vercel' : 'local'
+  });
+});
+
 // 0. SePay Webhook
 app.post('/sepay-webhook', async (req, res) => {
   try {
