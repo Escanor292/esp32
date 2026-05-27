@@ -34,9 +34,9 @@ const VAT_RATE = 0.10;
 
 // ============ BANK CONFIG (SePay VietQR) ============
 const BANK_CONFIG = {
-  accountNumber: '0123456789',  // TODO: Thay bằng số tài khoản thật
-  bankCode: 'MBBank',           // TODO: Thay bằng mã ngân hàng thật (VCB, TCB, ACB, MBBank...)
-  accountName: 'NGUYEN VAN A',  // TODO: Thay bằng tên chủ tài khoản
+  accountNumber: '0932299701',
+  bankCode: 'MBBank',
+  accountName: 'NGUYEN QUACH PHU TAI',
 };
 
 const fmt = (n) => n.toLocaleString('vi-VN') + 'đ';
