@@ -38,13 +38,28 @@ const mqttClient = mqtt.connect(MQTT_BROKER_URL, {
 });
 
 mqttClient.on('connect', () => {
-  console.log('✅ Connected to MQTT Broker');
+  console.log('✅ Connected to MQTT Broker:', MQTT_BROKER_URL);
+  console.log('   Client ID:', `backend-server-${STORE_ID}`);
   // Subscribe to device heartbeats
   mqttClient.subscribe(`payment/+/heartbeat`, (err) => {
     if (!err) {
       console.log('📡 Subscribed to MQTT heartbeats: payment/+/heartbeat');
+    } else {
+      console.error('❌ Failed to subscribe to heartbeats:', err);
     }
   });
+});
+
+mqttClient.on('disconnect', () => {
+  console.warn('⚠️ MQTT Broker disconnected');
+});
+
+mqttClient.on('offline', () => {
+  console.warn('⚠️ MQTT Client went offline');
+});
+
+mqttClient.on('reconnect', () => {
+  console.log('🔄 Reconnecting to MQTT Broker...');
 });
 
 mqttClient.on('error', (error) => {
@@ -635,8 +650,32 @@ app.post('/api/v1/orders', async (req, res) => {
     }
 
     // Push QR hint via MQTT so ESP32 can update its display
-    const mqttMsg = { id: orderId, transferAmount: total, content: txnCode, gateway: 'POS', transactionDate: newOrder.created_at, referenceCode: txnCode };
-    mqttClient.publish(`payment/${STORE_ID}/new_order`, JSON.stringify(mqttMsg), { qos: 1 });
+    const mqttMsg = { 
+      id: orderId, 
+      transferAmount: total, 
+      content: txnCode, 
+      gateway: 'POS', 
+      transactionDate: newOrder.created_at, 
+      referenceCode: txnCode 
+    };
+    
+    const mqttTopic = `payment/${STORE_ID}/new_order`;
+    
+    console.log('📤 Publishing MQTT message:');
+    console.log('   Topic:', mqttTopic);
+    console.log('   Payload:', JSON.stringify(mqttMsg));
+    
+    if (mqttClient && mqttClient.connected) {
+      mqttClient.publish(mqttTopic, JSON.stringify(mqttMsg), { qos: 1 }, (err) => {
+        if (err) {
+          console.error('❌ MQTT publish failed:', err);
+        } else {
+          console.log('✅ MQTT message published successfully');
+        }
+      });
+    } else {
+      console.error('❌ MQTT client not connected! Cannot send order to ESP32');
+    }
 
     res.json({ success: true, order: newOrder });
   } catch (error) {
