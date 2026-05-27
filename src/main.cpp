@@ -700,8 +700,17 @@ void playTransactionAudio(long amount) {
 void generateVietnameseAudio(long amount, int* audioSequence, int& sequenceLength) {
   sequenceLength = 0;
   
+  // File mapping:
+  // 0001-0010: số 0-9 (không, một, hai, ba, bốn, năm, sáu, bảy, tám, chín)
+  // 0011-0019: chục 10-90 (mười, hai mươi, ba mươi, ..., chín mươi)
+  // 0101-0109: trăm 100-900 (một trăm, hai trăm, ..., chín trăm)
+  // 1000: nghìn
+  // 1001: triệu
+  // 1002: đồng
+  // 1003: đã nhận được
+  
   if (amount == 0) {
-    audioSequence[sequenceLength++] = 1000;  // "không"
+    audioSequence[sequenceLength++] = 1;  // "không" (0001.mp3)
     return;
   }
   
@@ -710,17 +719,19 @@ void generateVietnameseAudio(long amount, int* audioSequence, int& sequenceLengt
   if (millions > 0) {
     // Add number for millions
     if (millions < 10) {
-      audioSequence[sequenceLength++] = 1000 + millions;  // 1001-1009
+      audioSequence[sequenceLength++] = millions + 1;  // 0002-0010 (một-chín)
     } else if (millions < 20) {
-      audioSequence[sequenceLength++] = 1000;  // "mười"
-      audioSequence[sequenceLength++] = 1000 + (millions - 10);
+      audioSequence[sequenceLength++] = 11;  // "mười" (0011.mp3)
+      if (millions > 10) {
+        audioSequence[sequenceLength++] = (millions - 10) + 1;  // 0002-0010
+      }
     } else {
       // For 20-99 millions
       int tens = millions / 10;
       int ones = millions % 10;
-      audioSequence[sequenceLength++] = 1000 + tens;  // "hai mươi", "ba mươi", etc.
+      audioSequence[sequenceLength++] = 10 + tens;  // 0012-0019 (hai mươi - chín mươi)
       if (ones > 0) {
-        audioSequence[sequenceLength++] = 1000 + ones;
+        audioSequence[sequenceLength++] = ones + 1;  // 0002-0010
       }
     }
     audioSequence[sequenceLength++] = 1001;  // "triệu"
@@ -731,16 +742,18 @@ void generateVietnameseAudio(long amount, int* audioSequence, int& sequenceLengt
   long thousands = amount / 1000;
   if (thousands > 0) {
     if (thousands < 10) {
-      audioSequence[sequenceLength++] = 1000 + thousands;
+      audioSequence[sequenceLength++] = thousands + 1;  // 0002-0010
     } else if (thousands < 20) {
-      audioSequence[sequenceLength++] = 1000;  // "mười"
-      audioSequence[sequenceLength++] = 1000 + (thousands - 10);
+      audioSequence[sequenceLength++] = 11;  // "mười" (0011.mp3)
+      if (thousands > 10) {
+        audioSequence[sequenceLength++] = (thousands - 10) + 1;  // 0002-0010
+      }
     } else {
       int tens = thousands / 10;
       int ones = thousands % 10;
-      audioSequence[sequenceLength++] = 1000 + tens;
+      audioSequence[sequenceLength++] = 10 + tens;  // 0012-0019
       if (ones > 0) {
-        audioSequence[sequenceLength++] = 1000 + ones;
+        audioSequence[sequenceLength++] = ones + 1;  // 0002-0010
       }
     }
     audioSequence[sequenceLength++] = 1000;  // "nghìn"
@@ -750,27 +763,25 @@ void generateVietnameseAudio(long amount, int* audioSequence, int& sequenceLengt
   // Process hundreds
   long hundreds = amount / 100;
   if (hundreds > 0) {
-    audioSequence[sequenceLength++] = 100 + hundreds;  // "một trăm", "hai trăm", etc.
+    audioSequence[sequenceLength++] = 100 + hundreds;  // 0101-0109 (một trăm - chín trăm)
     amount = amount % 100;
   }
   
   // Process tens and ones
   if (amount > 0) {
     if (amount < 10) {
-      if (amount > 0) {
-        audioSequence[sequenceLength++] = amount;  // 1-9
-      }
+      audioSequence[sequenceLength++] = amount + 1;  // 0002-0010
     } else if (amount < 20) {
-      audioSequence[sequenceLength++] = 10;  // "mười"
+      audioSequence[sequenceLength++] = 11;  // "mười" (0011.mp3)
       if (amount > 10) {
-        audioSequence[sequenceLength++] = amount - 10;
+        audioSequence[sequenceLength++] = (amount - 10) + 1;  // 0002-0010
       }
     } else {
       int tens = amount / 10;
       int ones = amount % 10;
-      audioSequence[sequenceLength++] = 20 + (tens - 2) * 10;  // "hai mươi", "ba mươi", etc.
+      audioSequence[sequenceLength++] = 10 + tens;  // 0012-0019 (hai mươi - chín mươi)
       if (ones > 0) {
-        audioSequence[sequenceLength++] = ones;
+        audioSequence[sequenceLength++] = ones + 1;  // 0002-0010
       }
     }
   }
