@@ -43,51 +43,85 @@ console.log('   Environment:', process.env.VERCEL ? 'Vercel Serverless' : 'Local
 // ============ MQTT HELPER FUNCTION (for Vercel Serverless) ============
 function publishMqttOnce(topic, payload) {
   return new Promise((resolve, reject) => {
+    const clientId = `vercel-publisher-${STORE_ID}-${Date.now()}-${Math.random()
+      .toString(16)
+      .slice(2)}`;
+
+    console.log('📡 MQTT publish start');
+    console.log('   Broker:', MQTT_BROKER_URL);
+    console.log('   Client ID:', clientId);
+    console.log('   Topic:', topic);
+    console.log('   Payload:', JSON.stringify(payload));
+
     const client = mqtt.connect(MQTT_BROKER_URL, {
-      clientId: `vercel-publisher-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      clientId,
       clean: true,
       connectTimeout: 10000,
-      reconnectPeriod: 0
+      reconnectPeriod: 0,
+      protocolVersion: 4
     });
 
-    const timer = setTimeout(() => {
-      try {
-        client.end(true);
-      } catch (e) {
-        // ignore
-      }
-      reject(new Error('MQTT connect timeout'));
-    }, 12000);
+    let finished = false;
 
-    client.on('connect', () => {
+    function finish(err, result) {
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
 
-      client.publish(topic, JSON.stringify(payload), { qos: 0 }, (err) => {
+      if (err) {
         try {
           client.end(true);
-        } catch (e) {
-          // ignore disconnect error
-        }
+        } catch (_) {}
 
-        if (err) {
-          reject(err);
-        } else {
-          resolve({
+        console.error('❌ MQTT publish failed:', err.message || err);
+        return reject(err);
+      }
+
+      console.log('✅ MQTT publish confirmed by broker');
+
+      client.end(false, {}, () => {
+        console.log('✅ MQTT disconnected cleanly');
+        return resolve(result);
+      });
+    }
+
+    const timer = setTimeout(() => {
+      finish(new Error('MQTT publish timeout'));
+    }, 15000);
+
+    client.on('connect', () => {
+      console.log('✅ MQTT connected to broker');
+
+      client.publish(
+        topic,
+        JSON.stringify(payload),
+        {
+          qos: 1,
+          retain: false
+        },
+        (err) => {
+          if (err) {
+            return finish(err);
+          }
+
+          return finish(null, {
             topic,
-            payload
+            payload,
+            broker: MQTT_BROKER_URL,
+            clientId,
+            qos: 1
           });
         }
-      });
+      );
     });
 
     client.on('error', (err) => {
-      clearTimeout(timer);
-      try {
-        client.end(true);
-      } catch (e) {
-        // ignore
-      }
-      reject(err);
+      console.error('❌ MQTT client error:', err.message || err);
+      finish(err);
+    });
+
+    client.on('close', () => {
+      console.log('ℹ️ MQTT connection closed');
     });
   });
 }
@@ -799,7 +833,11 @@ app.post('/api/test-mqtt', async (req, res) => {
     res.json({
       success: true,
       message: 'MQTT message sent successfully',
-      ...result
+      topic: result.topic,
+      payload: result.payload,
+      broker: result.broker,
+      clientId: result.clientId,
+      qos: result.qos
     });
   } catch (error) {
     console.error('Test MQTT error:', error.message);
