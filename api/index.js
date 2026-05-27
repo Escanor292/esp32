@@ -1049,27 +1049,31 @@ function authenticateDevice(req, res, next) {
 // ============ ERROR HANDLING ============
 
 app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
+  console.log('Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });
 
 // ============ START SERVER ============
 
-server.listen(PORT, () => {
-  console.log(`Payment Notification Backend (PostgreSQL) running on port ${PORT}`);
-  console.log(`WebSocket server ready at ws://localhost:${PORT}`);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  server.close(async () => {
-    console.log('Server closed');
-    await pool.end();
-    process.exit(0);
+// Only start server if not running on Vercel (for local development)
+if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+  server.listen(PORT, () => {
+    console.log(`Payment Notification Backend (PostgreSQL) running on port ${PORT}`);
+    console.log(`WebSocket server ready at ws://localhost:${PORT}`);
   });
-});
-
+  
+  // Graceful shutdown
+  process.on('SIGTERM', async () => {
+    console.log('SIGTERM received, shutting down gracefully');
+    server.close(async () => {
+      console.log('Server closed');
+      await pool.end();
+      process.exit(0);
+    });
+  });
+} else {
+  console.log('Running on Vercel serverless - skipping server.listen()');
+}
 
 // Export app for Vercel serverless
 module.exports = app;
