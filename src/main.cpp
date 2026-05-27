@@ -44,6 +44,11 @@ const char* MQTT_TOPIC = "payment/store_001/incoming";
 const char* MQTT_CLIENT_ID = "esp32_payment_device";
 const char* STORE_QR_DATA = "https://sepay.vn/vi/pay/store_001"; // Static QR code URL for Store
 
+// Bank Configuration (for VietQR)
+const char* BANK_ACCOUNT = "0932299701";
+const char* BANK_CODE = "MBBank";
+const char* BANK_NAME = "NGUYEN QUACH PHU TAI";
+
 // Pin Configuration
 #define DFPLAYER_RX 16
 #define DFPLAYER_TX 17
@@ -826,13 +831,16 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     display.print("Ma: ");
     display.println(txnCode);
     
-    // QR Code (right side)
-    String qrData = "https://sepay.vn/qr/" + txnCode;
+    // QR Code - Encode bank transfer info (VietQR format)
+    // Format: Bank|Account|Amount|Content
+    String qrData = String(BANK_CODE) + "|" + String(BANK_ACCOUNT) + "|" + String(amount) + "|" + txnCode;
     displayQRCode(qrData.c_str(), 70, 35, 1);
     
     display.display();
     
     Serial.println("✅ QR Code displayed on OLED");
+    Serial.print("   QR Data: ");
+    Serial.println(qrData);
     
     // Auto return to idle after 30 seconds
     delay(30000);
