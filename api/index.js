@@ -851,102 +851,120 @@ app.post('/api/test-mqtt', async (req, res) => {
 });
 
 // 0. SePay Webhook
-app.post('/sepay-webhook', async (req, res) => {
+async function handleSepayWebhook(req, res) {
   try {
-    console.log('Received SePay Webhook');
+    console.log('Received SePay Webhook:', JSON.stringify(req.body));
 
-    const payload = req.body;
+    const payload = req.body || {};
+    const amount = Number(payload.transferAmount || payload.amount || 0);
+    const transferType = payload.transferType || payload.type || '';
+    const txnCode = payload.referenceCode || payload.content || `SEPAY_${payload.id || Date.now()}`;
 
-    if (payload.transferType === 'in' && payload.transferAmount > 0) {
-      const mqttMessage = {
-        id: payload.id,
-        gateway: payload.gateway,
-        transactionDate: payload.transactionDate,
-        transferAmount: payload.transferAmount,
-        amount: payload.transferAmount,
-        content: payload.content,
-        referenceCode: payload.referenceCode,
-        txnCode: payload.referenceCode || payload.content || `SEPAY_${payload.id}`
-      };
-
-      const topic = `payment/${STORE_ID}/incoming`;
-
-      try {
-        await publishMqttOnce(topic, mqttMessage);
-        console.log(`✅ Payment notified via MQTT: ${payload.transferAmount} VND`);
-      } catch (mqttError) {
-        console.error('❌ Payment MQTT publish failed:', mqttError.message);
-      }
-
-      const txnCode = payload.referenceCode || `SEPAY_${payload.id}`;
-
-      if (useFallback) {
-        const existingTx = dbFallback.transactions.find(t => t.transaction_code === txnCode);
-
-        if (existingTx) {
-          existingTx.status = 'confirmed';
-          existingTx.confirmed_at = new Date().toISOString();
-          existingTx.bank_reference_id = String(payload.id);
-          console.log(`✅ Existing transaction ${txnCode} updated to confirmed in fallback DB`);
-        } else {
-          dbFallback.transactions.push({
-            id: uuidv4(),
-            device_id: STORE_ID,
-            transaction_code: txnCode,
-            amount: payload.transferAmount,
-            status: 'confirmed',
-            confirmed_at: new Date().toISOString(),
-            created_at: new Date().toISOString(),
-            description: 'Chuyển khoản trực tiếp'
-          });
-
-          console.log(`✅ New transaction ${txnCode} inserted in fallback DB`);
-        }
-
-        const pendingOrder = dbFallback.orders.find(
-          o => o.status === 'pending' && Math.abs((o.total || 0) - payload.transferAmount) < 1
-        );
-
-        if (pendingOrder) {
-          pendingOrder.status = 'confirmed';
-          pendingOrder.transaction_code = txnCode;
-          pendingOrder.confirmed_at = new Date().toISOString();
-          console.log(`✅ Order ${pendingOrder.id} auto-confirmed via webhook`);
-        }
-
-        saveFallback();
-      } else {
-        const existingTxResult = await pool.query(
-          'SELECT * FROM transactions WHERE transaction_code = $1',
-          [txnCode]
-        );
-
-        if (existingTxResult.rows.length > 0) {
-          await pool.query(
-            `UPDATE transactions 
-             SET status = $1, confirmed_at = $2, bank_reference_id = $3 
-             WHERE transaction_code = $4`,
-            ['confirmed', new Date(), String(payload.id), txnCode]
-          );
-
-          console.log(`✅ Existing transaction ${txnCode} updated to confirmed in PostgreSQL`);
-        } else {
-          await pool.query(
-            'INSERT INTO transactions (id, transaction_code, amount, status) VALUES ($1, $2, $3, $4)',
-            [uuidv4(), txnCode, payload.transferAmount, 'confirmed']
-          );
-
-          console.log(`✅ New transaction ${txnCode} inserted in PostgreSQL`);
-        }
-      }
+    if (transferType !== 'in' || amount <= 0) {
+      return res.json({
+        success: true,
+        ignored: true,
+        reason: 'Not incoming transfer or invalid amount',
+        payload
+      });
     }
 
-    res.json({ success: true });
+    const mqttMessage = {
+      id: Number(payload.id) || Date.now(),
+      device_id: STORE_ID,
+      gateway: payload.gateway || 'SEPAY',
+      transactionDate: payload.transactionDate || new Date().toISOString(),
+      transferAmount: amount,
+      amount,
+      content: payload.content || txnCode,
+      referenceCode: txnCode,
+      txnCode
+    };
+
+    const topic = `payment/${STORE_ID}/incoming`;
+
+    let mqttResult = null;
+
+    try {
+      mqttResult = await publishMqttOnce(topic, mqttMessage);
+      console.log('✅ Payment incoming MQTT sent:', mqttResult);
+    } catch (mqttError) {
+      console.error('❌ Payment incoming MQTT failed:', mqttError.message);
+    }
+
+    if (!dbFallback.transactions) dbFallback.transactions = [];
+
+    const existingTx = dbFallback.transactions.find(t => (
+      t.transaction_code === txnCode ||
+      String(t.bank_reference_id || '') === String(payload.id || '')
+    ));
+
+    if (existingTx) {
+      existingTx.status = 'confirmed';
+      existingTx.amount = amount;
+      existingTx.confirmed_at = new Date().toISOString();
+      existingTx.bank_reference_id = String(payload.id || '');
+      existingTx.gateway = payload.gateway || 'SEPAY';
+      existingTx.content = payload.content || txnCode;
+      existingTx.transaction_code = txnCode;
+      console.log(`✅ Existing transaction ${txnCode} updated to confirmed in fallback DB`);
+    } else {
+      dbFallback.transactions.push({
+        id: uuidv4(),
+        device_id: STORE_ID,
+        transaction_code: txnCode,
+        amount,
+        status: 'confirmed',
+        gateway: payload.gateway || 'SEPAY',
+        bank_reference_id: String(payload.id || ''),
+        content: payload.content || txnCode,
+        confirmed_at: new Date().toISOString(),
+        created_at: new Date().toISOString()
+      });
+      console.log(`✅ New transaction ${txnCode} inserted in fallback DB`);
+    }
+
+    if (!dbFallback.orders) dbFallback.orders = [];
+
+    const pendingOrder = dbFallback.orders.find(o => (
+      o.status === 'pending' && (
+        o.transaction_code === txnCode ||
+        o.referenceCode === txnCode ||
+        Math.abs(Number(o.total || 0) - amount) < 1
+      )
+    ));
+
+    if (pendingOrder) {
+      pendingOrder.status = 'confirmed';
+      pendingOrder.transaction_code = txnCode;
+      pendingOrder.confirmed_at = new Date().toISOString();
+      pendingOrder.payment_gateway = payload.gateway || 'SEPAY';
+      console.log(`✅ Order ${pendingOrder.id} auto-confirmed via webhook`);
+    }
+
+    saveFallback();
+
+    return res.json({
+      success: true,
+      message: 'Webhook processed',
+      mqtt: mqttResult,
+      transaction: {
+        transaction_code: txnCode,
+        amount,
+        gateway: payload.gateway || 'SEPAY'
+      }
+    });
   } catch (error) {
-    console.error('SePay webhook error:', error.message);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('SePay webhook error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
-});
+}
+
+app.post('/sepay-webhook', handleSepayWebhook);
+app.post('/api/sepay-webhook', handleSepayWebhook);
 
 // 0b. Create Order POS
 app.post('/api/v1/orders', async (req, res) => {
