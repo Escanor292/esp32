@@ -520,8 +520,63 @@ app.get('/api/health', (req, res) => {
     ok: true,
     message: 'API running on Vercel',
     timestamp: new Date().toISOString(),
-    environment: process.env.VERCEL ? 'vercel' : 'local'
+    environment: process.env.VERCEL ? 'vercel' : 'local',
+    mqtt: {
+      connected: mqttClient.connected,
+      broker: MQTT_BROKER_URL,
+      clientId: `backend-server-${STORE_ID}`
+    }
   });
+});
+
+// Test MQTT endpoint
+app.post('/api/test-mqtt', (req, res) => {
+  const { amount, txnCode } = req.body;
+  
+  const testAmount = amount || 50000;
+  const testTxnCode = txnCode || `TEST_${Date.now().toString(36).toUpperCase()}`;
+  
+  const mqttMsg = { 
+    id: 'test-' + Date.now(), 
+    transferAmount: testAmount, 
+    content: testTxnCode, 
+    gateway: 'TEST', 
+    transactionDate: new Date().toISOString(), 
+    referenceCode: testTxnCode 
+  };
+  
+  const mqttTopic = `payment/${STORE_ID}/new_order`;
+  
+  if (mqttClient && mqttClient.connected) {
+    mqttClient.publish(mqttTopic, JSON.stringify(mqttMsg), { qos: 1 }, (err) => {
+      if (err) {
+        res.json({
+          success: false,
+          error: err.message,
+          mqtt: {
+            connected: mqttClient.connected,
+            topic: mqttTopic
+          }
+        });
+      } else {
+        res.json({
+          success: true,
+          message: 'MQTT message sent',
+          topic: mqttTopic,
+          payload: mqttMsg
+        });
+      }
+    });
+  } else {
+    res.json({
+      success: false,
+      error: 'MQTT client not connected',
+      mqtt: {
+        connected: mqttClient.connected,
+        broker: MQTT_BROKER_URL
+      }
+    });
+  }
 });
 
 // 0. SePay Webhook
