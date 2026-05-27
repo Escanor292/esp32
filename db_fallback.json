@@ -3,8 +3,8 @@
     {
       "id": "store_001",
       "location_name": "Quầy Thu Ngân 1",
-      "status": "online",
-      "last_heartbeat": "2026-05-27T11:12:29.411Z",
+      "status": "offline",
+      "last_heartbeat": "2026-05-27T12:12:14.876Z",
       "config": {
         "model": "ESP32-DevKit"
       },
