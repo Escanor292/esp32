@@ -899,6 +899,45 @@ app.get('/api/v1/devices/:device_id', authenticateDevice, async (req, res) => {
   }
 });
 
+// 5b. Device Heartbeat (HTTP endpoint for ESP32)
+app.post('/api/v1/devices/heartbeat', async (req, res) => {
+  try {
+    const { device_id, status } = req.body;
+    
+    if (!device_id) {
+      return res.status(400).json({ error: 'device_id is required' });
+    }
+    
+    console.log(`📡 Heartbeat received from ${device_id}`);
+    
+    // Update device status
+    await updateDeviceStatus(device_id, status || 'online');
+    
+    // If in fallback mode, update immediately
+    if (useFallback) {
+      const device = dbFallback.devices.find(d => d.id === device_id);
+      if (device) {
+        device.status = status || 'online';
+        device.last_heartbeat = new Date().toISOString();
+        saveFallback();
+        console.log(`✅ Device ${device_id} status updated to ${device.status}`);
+      } else {
+        console.log(`⚠️ Device ${device_id} not found in fallback DB`);
+      }
+    }
+    
+    res.json({ 
+      success: true, 
+      device_id,
+      status: status || 'online',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Heartbeat error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // 6. Get Dashboard Data
 app.get('/api/v1/dashboard', async (req, res) => {
   try {

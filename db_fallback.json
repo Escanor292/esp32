@@ -1,0 +1,37 @@
+{
+  "devices": [
+    {
+      "id": "store_001",
+      "location_name": "Quầy Thu Ngân 1",
+      "status": "online",
+      "last_heartbeat": "2026-05-27T01:42:44.301Z",
+      "config": {
+        "model": "ESP32-DevKit"
+      },
+      "created_at": "2026-05-26T19:23:48.179Z"
+    },
+    {
+      "id": "store_002",
+      "location_name": "Quầy Pha Chế 2",
+      "status": "offline",
+      "last_heartbeat": null,
+      "config": {
+        "model": "ESP32-DevKit"
+      },
+      "created_at": "2026-05-26T19:23:48.180Z"
+    },
+    {
+      "id": "store_003",
+      "location_name": "Quầy Mang Về (Takeaway)",
+      "status": "offline",
+      "last_heartbeat": null,
+      "config": {
+        "model": "ESP32-DevKit"
+      },
+      "created_at": "2026-05-26T19:23:48.180Z"
+    }
+  ],
+  "transactions": [],
+  "notification_queue": [],
+  "orders": []
+}

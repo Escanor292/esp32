@@ -16,6 +16,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
+#include <HTTPClient.h>
 #include <PubSubClient.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -290,6 +291,8 @@ void loop() {
   if (millis() - lastHeartbeat > 15000) {
     lastHeartbeat = millis();
     Serial.println("Heartbeat - System online");
+    
+    // Send heartbeat via MQTT
     if (mqttClient.connected()) {
       StaticJsonDocument<128> doc;
       doc["device_id"] = STORE_ID;
@@ -298,6 +301,28 @@ void loop() {
       serializeJson(doc, buffer);
       mqttClient.publish("payment/store_001/heartbeat", buffer);
       Serial.println("✅ Heartbeat sent to MQTT");
+    }
+    
+    // Send heartbeat via HTTP to Vercel
+    if (WiFi.status() == WL_CONNECTED) {
+      HTTPClient http;
+      http.begin("https://esp32-ruddy.vercel.app/api/v1/devices/heartbeat");
+      http.addHeader("Content-Type", "application/json");
+      
+      StaticJsonDocument<128> doc;
+      doc["device_id"] = STORE_ID;
+      doc["status"] = "online";
+      
+      String payload;
+      serializeJson(doc, payload);
+      
+      int httpCode = http.POST(payload);
+      if (httpCode > 0) {
+        Serial.printf("✅ HTTP Heartbeat sent: %d\n", httpCode);
+      } else {
+        Serial.printf("❌ HTTP Heartbeat failed: %s\n", http.errorToString(httpCode).c_str());
+      }
+      http.end();
     }
   }
   
