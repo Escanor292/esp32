@@ -78,7 +78,7 @@ mqttClient.on('message', async (topic, message) => {
 // Background task: Check for inactive devices (offline check every 10s)
 setInterval(async () => {
   try {
-    const threshold = new Date(Date.now() - 35000); // 35 seconds of silence
+    const threshold = new Date(Date.now() - 60000); // 60 seconds of silence (heartbeat is 30s)
     if (useFallback) {
       let changed = false;
       dbFallback.devices.forEach(d => {
@@ -164,6 +164,14 @@ if (fs.existsSync(DB_FALLBACK_FILE)) {
 }
 
 function saveFallback() {
+  // On Vercel serverless, filesystem is read-only
+  // So we skip file write and keep data in memory only
+  // For production, use Vercel KV, PostgreSQL, or other persistent storage
+  if (process.env.VERCEL) {
+    console.log('⚠️ Running on Vercel - skipping file write (use in-memory only)');
+    return;
+  }
+  
   try {
     fs.writeFileSync(DB_FALLBACK_FILE, JSON.stringify(dbFallback, null, 2), 'utf8');
   } catch (err) {

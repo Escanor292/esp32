@@ -287,8 +287,8 @@ void loop() {
   // Update LED status
   updateLEDStatus();
   
-  // Send heartbeat every 15 seconds
-  if (millis() - lastHeartbeat > 15000) {
+  // Send heartbeat every 30 seconds (reduced frequency for stability)
+  if (millis() - lastHeartbeat > 30000) {
     lastHeartbeat = millis();
     Serial.println("Heartbeat - System online");
     
@@ -306,6 +306,9 @@ void loop() {
     // Send heartbeat via HTTP to Vercel
     if (WiFi.status() == WL_CONNECTED) {
       HTTPClient http;
+      http.setTimeout(15000); // 15 second timeout
+      http.setReuse(false);   // Don't reuse connection (prevents SSL EOF errors)
+      
       http.begin("https://esp32-ruddy.vercel.app/api/v1/devices/heartbeat");
       http.addHeader("Content-Type", "application/json");
       
