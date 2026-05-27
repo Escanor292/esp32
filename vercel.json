@@ -19,8 +19,16 @@
       "dest": "/api/index.js"
     },
     {
-      "src": "/(.*)",
+      "src": "/static/(.*)",
+      "dest": "/dashboard/static/$1"
+    },
+    {
+      "src": "/(.*\\.(js|css|png|jpg|jpeg|gif|svg|ico|json|woff|woff2|ttf|eot))",
       "dest": "/dashboard/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/dashboard/index.html"
     }
   ]
 }

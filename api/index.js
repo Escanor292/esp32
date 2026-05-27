@@ -858,8 +858,8 @@ app.post('/api/v1/transactions/confirm', async (req, res) => {
   }
 });
 
-// 4. Get Transaction History
-app.get('/api/v1/transactions', authenticateDevice, async (req, res) => {
+// 4. Get Transaction History (No auth required for demo/internal dashboard)
+app.get('/api/v1/transactions', async (req, res) => {
   try {
     const { device_id, date_from, date_to } = req.query;
     
