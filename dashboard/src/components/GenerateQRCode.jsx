@@ -6,12 +6,10 @@ import {
   Grid,
   Paper,
   Typography,
-  CircularProgress,
   Alert,
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import PrintIcon from '@mui/icons-material/Print';
-import api from '../services/api';
 
 // ============ BANK CONFIG (SePay VietQR) ============
 const BANK_CONFIG = {
@@ -25,15 +23,21 @@ const generateQRUrl = (amount, content) => {
   return `https://qr.sepay.vn/img?acc=${BANK_CONFIG.accountNumber}&bank=${BANK_CONFIG.bankCode}&amount=${amount}&des=${encodeURIComponent(content)}&template=compact`;
 };
 
+// Generate transaction code
+const generateTransactionCode = () => {
+  const timestamp = Date.now().toString(36).toUpperCase();
+  const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+  return `QR_${timestamp}${random}`;
+};
+
 function GenerateQRCode({ devices }) {
   const [amount, setAmount] = useState('');
   const [serviceName, setServiceName] = useState('');
   const [selectedDevice, setSelectedDevice] = useState(
     devices.length > 0 ? devices[0].id : ''
   );
-  const [qrData, setQrData] = useState(null);
+  const [showQR, setShowQR] = useState(false);
   const [transactionCode, setTransactionCode] = useState('');
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const formatAmount = (val) => {
@@ -47,49 +51,74 @@ function GenerateQRCode({ devices }) {
     setAmount(cleanVal);
   };
 
-  const handleGenerate = async () => {
-    if (!amount || !selectedDevice) {
-      setError('Vui lòng nhập đầy đủ thông tin');
+  const handleGenerate = () => {
+    if (!amount) {
+      setError('Vui lòng nhập số tiền');
       return;
     }
 
-    setLoading(true);
-    setError('');
-
-    try {
-      const response = await api.post('/transactions/request', {
-        device_id: selectedDevice,
-        amount: parseFloat(amount),
-        currency: 'VND',
-        description: serviceName || 'Dịch vụ ngoài'
-      });
-
-      setQrData(response.data.qr_data);
-      setTransactionCode(response.data.transaction_code);
-    } catch (err) {
-      setError('Lỗi tạo mã QR');
-      console.error('Error:', err);
+    if (parseFloat(amount) <= 0) {
+      setError('Số tiền phải lớn hơn 0');
+      return;
     }
 
-    setLoading(false);
+    setError('');
+    const txnCode = generateTransactionCode();
+    setTransactionCode(txnCode);
+    setShowQR(true);
   };
 
   const handleDownload = () => {
-    const element = document.getElementById('qr-code');
-    const canvas = element.querySelector('canvas');
-    const url = canvas.toDataURL('image/png');
+    const qrUrl = generateQRUrl(amount, transactionCode);
     const link = document.createElement('a');
-    link.href = url;
+    link.href = qrUrl;
     link.download = `qr_${transactionCode}.png`;
+    link.target = '_blank';
     link.click();
   };
 
   const handlePrint = () => {
-    const element = document.getElementById('qr-code');
-    const printWindow = window.open('', '', 'height=400,width=600');
-    printWindow.document.write(element.innerHTML);
+    const printWindow = window.open('', '', 'height=600,width=800');
+    const qrUrl = generateQRUrl(amount, transactionCode);
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>In mã QR - ${transactionCode}</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              text-align: center;
+              padding: 20px;
+            }
+            h2 { margin-bottom: 10px; }
+            img { margin: 20px 0; border: 2px solid #333; padding: 10px; }
+            .info { margin: 10px 0; font-size: 14px; }
+          </style>
+        </head>
+        <body>
+          <h2>Mã thanh toán QR</h2>
+          <div class="info"><strong>Mã giao dịch:</strong> ${transactionCode}</div>
+          ${serviceName ? `<div class="info"><strong>Dịch vụ:</strong> ${serviceName}</div>` : ''}
+          <div class="info"><strong>Số tiền:</strong> ${parseFloat(amount).toLocaleString('vi-VN')}đ</div>
+          <div class="info"><strong>Ngân hàng:</strong> ${BANK_CONFIG.bankCode} - ${BANK_CONFIG.accountNumber}</div>
+          <div class="info"><strong>Chủ tài khoản:</strong> ${BANK_CONFIG.accountName}</div>
+          <img src="${qrUrl}" alt="QR Code" width="300" height="300" />
+          <div class="info" style="margin-top: 20px; color: #666;">Quét mã QR bằng app ngân hàng để thanh toán</div>
+        </body>
+      </html>
+    `);
     printWindow.document.close();
-    printWindow.print();
+    setTimeout(() => {
+      printWindow.print();
+    }, 250);
+  };
+
+  const handleReset = () => {
+    setShowQR(false);
+    setAmount('');
+    setServiceName('');
+    setTransactionCode('');
+    setError('');
   };
 
   return (
@@ -103,7 +132,8 @@ function GenerateQRCode({ devices }) {
               value={serviceName}
               onChange={(e) => setServiceName(e.target.value)}
               fullWidth
-              placeholder="Ví dụ: Phí dịch vụ ngoài, Nạp tiền..."
+              placeholder="Ví dụ: Phí dịch vụ, Nạp tiền..."
+              disabled={showQR}
             />
           </Grid>
           <Grid item xs={12} sm={4}>
@@ -113,7 +143,9 @@ function GenerateQRCode({ devices }) {
               value={formatAmount(amount)}
               onChange={handleAmountChange}
               fullWidth
-              placeholder="Ví dụ: 1.000"
+              placeholder="Ví dụ: 100.000"
+              disabled={showQR}
+              required
             />
           </Grid>
           <Grid item xs={12} sm={4}>
@@ -123,6 +155,7 @@ function GenerateQRCode({ devices }) {
               value={selectedDevice}
               onChange={(e) => setSelectedDevice(e.target.value)}
               fullWidth
+              disabled={showQR}
               SelectProps={{
                 native: true,
               }}
@@ -135,15 +168,25 @@ function GenerateQRCode({ devices }) {
             </TextField>
           </Grid>
           <Grid item xs={12}>
-            <Button
-              variant="contained"
-              onClick={handleGenerate}
-              disabled={loading}
-              fullWidth
-              sx={{ py: 1.5 }}
-            >
-              {loading ? <CircularProgress size={24} /> : 'Tạo mã QR'}
-            </Button>
+            {!showQR ? (
+              <Button
+                variant="contained"
+                onClick={handleGenerate}
+                fullWidth
+                sx={{ py: 1.5 }}
+              >
+                TẠO MÃ QR
+              </Button>
+            ) : (
+              <Button
+                variant="outlined"
+                onClick={handleReset}
+                fullWidth
+                sx={{ py: 1.5 }}
+              >
+                Tạo mã QR mới
+              </Button>
+            )}
           </Grid>
         </Grid>
 
@@ -155,19 +198,29 @@ function GenerateQRCode({ devices }) {
       </Paper>
 
       {/* QR Code Display */}
-      {qrData && (
+      {showQR && (
         <Paper sx={{ p: 3, textAlign: 'center' }}>
-          <Typography variant="h6" sx={{ mb: 2 }}>
-            Mã giao dịch: {transactionCode}
+          <Typography variant="h6" sx={{ mb: 1 }}>
+            Mã giao dịch: <strong>{transactionCode}</strong>
+          </Typography>
+
+          {serviceName && (
+            <Typography variant="subtitle1" sx={{ mb: 1, color: 'text.secondary' }}>
+              Dịch vụ: {serviceName}
+            </Typography>
+          )}
+
+          <Typography variant="h5" color="primary" fontWeight={700} sx={{ mb: 2 }}>
+            Số tiền: {parseFloat(amount).toLocaleString('vi-VN')}đ
           </Typography>
 
           <Box
-            id="qr-code"
             sx={{
               display: 'inline-block',
               p: 2,
-              border: '1px solid #ddd',
-              borderRadius: '8px',
+              border: '3px solid',
+              borderColor: 'primary.main',
+              borderRadius: '12px',
               mb: 3,
               backgroundColor: 'white'
             }}
@@ -175,23 +228,30 @@ function GenerateQRCode({ devices }) {
             <img 
               src={generateQRUrl(amount, transactionCode)}
               alt="QR thanh toán"
-              style={{ width: 256, height: 256, display: 'block' }}
+              style={{ width: 280, height: 280, display: 'block' }}
             />
           </Box>
 
-          {serviceName && (
-            <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 0.5 }}>
-              Sản phẩm / Dịch vụ: {serviceName}
-            </Typography>
-          )}
           <Typography variant="body2" sx={{ mb: 2, color: 'text.secondary' }}>
-            Số tiền: {parseFloat(amount).toLocaleString('vi-VN')}đ
+            Nội dung chuyển khoản: <strong>{transactionCode}</strong>
           </Typography>
+
+          <Paper variant="outlined" sx={{ p: 2, mb: 3, textAlign: 'left', maxWidth: 400, mx: 'auto' }}>
+            <Typography variant="caption" display="block" sx={{ mb: 0.5 }}>
+              <strong>Ngân hàng:</strong> {BANK_CONFIG.bankCode}
+            </Typography>
+            <Typography variant="caption" display="block" sx={{ mb: 0.5 }}>
+              <strong>Số tài khoản:</strong> {BANK_CONFIG.accountNumber}
+            </Typography>
+            <Typography variant="caption" display="block">
+              <strong>Chủ tài khoản:</strong> {BANK_CONFIG.accountName}
+            </Typography>
+          </Paper>
 
           <Grid container spacing={2} justifyContent="center">
             <Grid item>
               <Button
-                variant="outlined"
+                variant="contained"
                 startIcon={<DownloadIcon />}
                 onClick={handleDownload}
               >
@@ -200,7 +260,8 @@ function GenerateQRCode({ devices }) {
             </Grid>
             <Grid item>
               <Button
-                variant="outlined"
+                variant="contained"
+                color="secondary"
                 startIcon={<PrintIcon />}
                 onClick={handlePrint}
               >

@@ -42,7 +42,6 @@ const int MQTT_PORT = 1883;
 const char* STORE_ID = "store_001";
 const char* MQTT_TOPIC = "payment/store_001/incoming";
 const char* MQTT_CLIENT_ID = "esp32_payment_device";
-const char* STORE_QR_DATA = "https://sepay.vn/vi/pay/store_001"; // Static QR code URL for Store
 
 // Bank Configuration (for VietQR)
 const char* BANK_ACCOUNT = "0932299701";
@@ -611,27 +610,26 @@ void displayIdleScreen() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   
-  // Left side: Text descriptions
-  display.setTextSize(1);
-  display.setCursor(0, 4);
+  // Center aligned welcome screen
+  display.setTextSize(2);
+  display.setCursor(10, 5);
   display.println("SEPAY");
-  display.setCursor(0, 14);
+  
+  display.setTextSize(1);
+  display.setCursor(15, 25);
+  display.println("HE THONG");
+  display.setCursor(5, 35);
+  display.println("THANH TOAN");
+  
+  display.drawFastHLine(0, 48, 128, SSD1306_WHITE);
+  
+  display.setCursor(10, 52);
+  display.println("Trang thai:");
+  display.setCursor(75, 52);
   display.println("ONLINE");
   
-  display.drawFastHLine(0, 25, 58, SSD1306_WHITE);
-  
-  display.setCursor(0, 31);
-  display.println("QUET MA");
-  display.setCursor(0, 41);
-  display.println("THANH");
-  display.setCursor(0, 51);
-  display.println("TOAN");
-  
-  // Right side: QR Code
-  displayQRCode(STORE_QR_DATA, 64, 3, 2);
-  
   display.display();
-  Serial.println("Idle screen with QR Code rendered successfully");
+  Serial.println("Idle screen displayed - Waiting for orders");
 }
 
 void displayConnecting(const char* message) {
