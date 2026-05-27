@@ -14,6 +14,18 @@ import DownloadIcon from '@mui/icons-material/Download';
 import PrintIcon from '@mui/icons-material/Print';
 import api from '../services/api';
 
+// ============ BANK CONFIG (SePay VietQR) ============
+const BANK_CONFIG = {
+  accountNumber: '0123456789',  // TODO: Thay bằng số tài khoản thật
+  bankCode: 'MBBank',           // TODO: Thay bằng mã ngân hàng thật (VCB, TCB, ACB, MBBank...)
+  accountName: 'NGUYEN VAN A',  // TODO: Thay bằng tên chủ tài khoản
+};
+
+// Generate VietQR URL using SePay API
+const generateQRUrl = (amount, content) => {
+  return `https://qr.sepay.vn/img?acc=${BANK_CONFIG.accountNumber}&bank=${BANK_CONFIG.bankCode}&amount=${amount}&des=${encodeURIComponent(content)}&template=compact`;
+};
+
 function GenerateQRCode({ devices }) {
   const [amount, setAmount] = useState('');
   const [serviceName, setServiceName] = useState('');
@@ -24,8 +36,6 @@ function GenerateQRCode({ devices }) {
   const [transactionCode, setTransactionCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-
-  const STORE_QR_BASE = 'https://sepay.vn/vi/pay/store_001?amount=';
 
   const formatAmount = (val) => {
     if (!val) return '';
@@ -163,11 +173,10 @@ function GenerateQRCode({ devices }) {
               backgroundColor: 'white'
             }}
           >
-            <QRCode
-              value={`${STORE_QR_BASE}${amount}&description=${transactionCode}`}
-              size={256}
-              level="H"
-              includeMargin={true}
+            <img 
+              src={generateQRUrl(amount, transactionCode)}
+              alt="QR thanh toán"
+              style={{ width: 256, height: 256, display: 'block' }}
             />
           </Box>
 

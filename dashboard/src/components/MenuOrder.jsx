@@ -31,9 +31,20 @@ const MENU_ITEMS = [
 
 const CATEGORIES = ['Tất cả', ...new Set(MENU_ITEMS.map(i => i.category))];
 const VAT_RATE = 0.10;
-const STORE_QR_BASE = 'https://sepay.vn/vi/pay/store_001?amount=';
+
+// ============ BANK CONFIG (SePay VietQR) ============
+const BANK_CONFIG = {
+  accountNumber: '0123456789',  // TODO: Thay bằng số tài khoản thật
+  bankCode: 'MBBank',           // TODO: Thay bằng mã ngân hàng thật (VCB, TCB, ACB, MBBank...)
+  accountName: 'NGUYEN VAN A',  // TODO: Thay bằng tên chủ tài khoản
+};
 
 const fmt = (n) => n.toLocaleString('vi-VN') + 'đ';
+
+// Generate VietQR URL using SePay API
+const generateQRUrl = (amount, content) => {
+  return `https://qr.sepay.vn/img?acc=${BANK_CONFIG.accountNumber}&bank=${BANK_CONFIG.bankCode}&amount=${amount}&des=${encodeURIComponent(content)}&template=compact`;
+};
 
 export default function MenuOrder() {
   const [cart, setCart] = useState({});
@@ -237,10 +248,10 @@ export default function MenuOrder() {
           {currentOrder && (
             <>
               <Box sx={{ display: 'inline-block', p: 2, background: 'white', borderRadius: 2, border: '3px solid', borderColor: 'primary.main', mb: 2 }}>
-                <QRCode
-                  value={`${STORE_QR_BASE}${currentOrder.total}&description=${currentOrder.transaction_code}`}
-                  size={200}
-                  level="M"
+                <img 
+                  src={generateQRUrl(currentOrder.total, currentOrder.transaction_code)}
+                  alt="QR thanh toán"
+                  style={{ width: 200, height: 200, display: 'block' }}
                 />
               </Box>
               <Typography variant="h4" fontWeight={800} color="primary" gutterBottom>
