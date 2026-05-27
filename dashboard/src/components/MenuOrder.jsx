@@ -26,6 +26,7 @@ const MENU_ITEMS = [
   { id: 10, name: 'Bánh croissant', price: 28000, category: 'Bánh', emoji: '🥐', color: '#D4A017' },
   { id: 11, name: 'Bánh mì sandwich', price: 35000, category: 'Bánh', emoji: '🥪', color: '#F5A623' },
   { id: 12, name: 'Bánh flan', price: 22000, category: 'Bánh', emoji: '🍮', color: '#F4D03F' },
+  { id: 13, name: 'Kẹo', price: 3000, category: 'Bánh', emoji: '🍬', color: '#FF6FB5' },
 ];
 
 const CATEGORIES = ['Tất cả', ...new Set(MENU_ITEMS.map(i => i.category))];

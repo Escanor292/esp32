@@ -22,6 +22,7 @@ const DB_USER = process.env.DB_USER || 'postgres';
 const DB_PASSWORD = process.env.DB_PASSWORD || '';
 const DB_NAME = process.env.DB_NAME || 'payment_system';
 const DB_PORT = process.env.DB_PORT || 5432;
+const DATABASE_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL || '';
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 
 // ============ SEPAY & MQTT CONFIG ============
@@ -184,16 +185,26 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 
 // ============ DATABASE SETUP (PostgreSQL) ============
-const pool = new Pool({
-  host: DB_HOST,
-  user: DB_USER,
-  password: DB_PASSWORD,
-  database: DB_NAME,
-  port: DB_PORT,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-});
+const pool = DATABASE_URL
+  ? new Pool({
+      connectionString: DATABASE_URL,
+      ssl: {
+        rejectUnauthorized: false
+      },
+      max: 5,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000
+    })
+  : new Pool({
+      host: DB_HOST,
+      user: DB_USER,
+      password: DB_PASSWORD,
+      database: DB_NAME,
+      port: DB_PORT,
+      max: 5,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000
+    });
 
 pool.on('error', (err) => {
   console.error('Unexpected error on idle client', err);
@@ -235,7 +246,40 @@ function createDefaultDevices() {
   ];
 }
 
+async function ensureDefaultDevicesInDb() {
+  if (!databaseConnected || useFallback) return;
+  const defaults = createDefaultDevices();
+
+  for (const device of defaults) {
+    await pool.query(
+      `INSERT INTO devices (id, location_name, status, config)
+       VALUES ($1, $2, $3, $4::jsonb)
+       ON CONFLICT (id) DO NOTHING`,
+      [device.id, device.location_name, device.status || 'offline', JSON.stringify(device.config || {})]
+    );
+  }
+}
+
+function mapOrderRow(row) {
+  const items = Array.isArray(row.items) ? row.items : [];
+  return {
+    id: row.id,
+    transaction_code: row.transaction_code,
+    store_name: row.store_name,
+    items,
+    subtotal: Number(row.subtotal || 0),
+    vat: Number(row.vat || 0),
+    total: Number(row.total || 0),
+    status: row.status,
+    payment_gateway: row.payment_gateway || null,
+    bank_reference_id: row.bank_reference_id || null,
+    confirmed_at: row.confirmed_at,
+    created_at: row.created_at
+  };
+}
+
 let useFallback = false;
+let databaseConnected = false;
 let dbFallback = {
   devices: createDefaultDevices(),
   transactions: [],
@@ -572,6 +616,7 @@ pool.query = async function(text, params) {
     return await originalQuery(text, params);
   } catch (err) {
     console.error('❌ PostgreSQL query failed, switching to local database fallback:', err.message);
+    databaseConnected = false;
     useFallback = true;
     return fallbackQuery(text, params);
   }
@@ -580,10 +625,13 @@ pool.query = async function(text, params) {
 pool.connect((err, client, release) => {
   if (err) {
     console.warn('⚠️ Could not connect to PostgreSQL database. Using local JSON fallback database');
+    databaseConnected = false;
     useFallback = true;
     ensureDefaultDevices();
   } else {
     console.log('✅ Connected to PostgreSQL database successfully');
+    databaseConnected = true;
+    useFallback = false;
     release();
   }
 });
@@ -799,6 +847,11 @@ app.get('/api/health', (req, res) => {
       broker: MQTT_BROKER_URL,
       clientId: `backend-server-${STORE_ID}`
     },
+    database: {
+      connected: databaseConnected,
+      usingFallback: useFallback,
+      hasDatabaseUrl: Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL)
+    },
     fallback: {
       enabled: useFallback,
       device_count: dbFallback.devices.length,
@@ -902,6 +955,58 @@ async function handleSepayWebhook(req, res) {
       console.error('❌ Payment incoming MQTT failed:', mqttError.message);
     }
 
+    if (databaseConnected && !useFallback) {
+      try {
+        await pool.query(
+          `INSERT INTO transactions
+            (id, device_id, transaction_code, amount, status, gateway, bank_reference_id, content, reference_code, confirmed_at, created_at)
+           VALUES
+            ($1, $2, $3, $4, 'confirmed', $5, $6, $7, $8, NOW(), NOW())`,
+          [
+            uuidv4(),
+            STORE_ID,
+            txnCode,
+            amount,
+            payload.gateway || 'SEPAY',
+            String(payload.id || ''),
+            rawContent,
+            rawRef
+          ]
+        );
+
+        const pendingResult = await pool.query(
+          `SELECT * FROM orders WHERE status = 'pending' ORDER BY created_at DESC LIMIT 100`
+        );
+
+        for (const order of pendingResult.rows) {
+          const orderCode = order.transaction_code || order.txncode || order.reference_code || '';
+          const normalizedOrderCode = normalizeOrderText(orderCode);
+          const amountMatched = Math.abs(Number(order.total || 0) - amount) < 1;
+          const codeMatched = normalizedOrderCode && normalizedWebhookText.includes(normalizedOrderCode);
+
+          if (codeMatched || amountMatched) {
+            await pool.query(
+              `UPDATE orders
+               SET status = 'confirmed',
+                   confirmed_at = NOW(),
+                   payment_gateway = $1,
+                   bank_reference_id = $2,
+                   webhook_content = $3,
+                   webhook_reference_code = $4
+               WHERE id = $5`,
+              [payload.gateway || 'SEPAY', String(payload.id || ''), rawContent, rawRef, order.id]
+            );
+            console.log(`✅ Order ${order.id} auto-confirmed in PostgreSQL via webhook`);
+            break;
+          }
+        }
+      } catch (dbError) {
+        console.error('⚠️ SePay PostgreSQL update failed, using fallback:', dbError.message);
+        databaseConnected = false;
+        useFallback = true;
+      }
+    }
+
     if (!dbFallback.transactions) dbFallback.transactions = [];
 
     const existingTx = dbFallback.transactions.find(t => (
@@ -1001,7 +1106,7 @@ app.post('/api/v1/orders', async (req, res) => {
     const orderId = uuidv4();
     const txnCode = `ORDER_${Date.now().toString(36).toUpperCase()}`;
 
-    const newOrder = {
+    let newOrder = {
       id: orderId,
       transaction_code: txnCode,
       store_name: store_name || 'Cửa Hàng',
@@ -1014,8 +1119,39 @@ app.post('/api/v1/orders', async (req, res) => {
       created_at: new Date().toISOString()
     };
 
-    dbFallback.orders.push(newOrder);
-    saveFallback();
+    if (databaseConnected && !useFallback) {
+      try {
+        await ensureDefaultDevicesInDb();
+        const orderResult = await pool.query(
+          `INSERT INTO orders
+            (id, transaction_code, store_name, items, subtotal, vat, total, status, created_at)
+           VALUES
+            ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9)
+           RETURNING *`,
+          [
+            newOrder.id,
+            newOrder.transaction_code,
+            newOrder.store_name,
+            JSON.stringify(newOrder.items || []),
+            newOrder.subtotal,
+            newOrder.vat,
+            newOrder.total,
+            newOrder.status,
+            newOrder.created_at
+          ]
+        );
+        newOrder = mapOrderRow(orderResult.rows[0]);
+      } catch (dbError) {
+        console.error('⚠️ Create order in PostgreSQL failed, using fallback:', dbError.message);
+        databaseConnected = false;
+        useFallback = true;
+      }
+    }
+
+    if (useFallback || !databaseConnected) {
+      dbFallback.orders.push(newOrder);
+      saveFallback();
+    }
 
     const mqttMsg = {
       id: orderId,
@@ -1049,6 +1185,35 @@ app.get('/api/v1/orders', async (req, res) => {
   try {
     const { status, date } = req.query;
 
+    if (databaseConnected && !useFallback) {
+      try {
+        const where = [];
+        const params = [];
+
+        if (status) {
+          params.push(status);
+          where.push(`status = $${params.length}`);
+        }
+
+        if (date) {
+          params.push(date);
+          where.push(`created_at::date = $${params.length}`);
+        }
+
+        const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+        const result = await pool.query(
+          `SELECT * FROM orders ${whereSql} ORDER BY created_at DESC`,
+          params
+        );
+
+        return res.json({ orders: result.rows.map(mapOrderRow) });
+      } catch (dbError) {
+        console.error('⚠️ Get orders from PostgreSQL failed, using fallback:', dbError.message);
+        databaseConnected = false;
+        useFallback = true;
+      }
+    }
+
     let orders = [...(dbFallback.orders || [])];
 
     if (status) {
@@ -1061,7 +1226,7 @@ app.get('/api/v1/orders', async (req, res) => {
 
     orders.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-    res.json({ orders });
+    return res.json({ orders });
   } catch (error) {
     console.error('Get orders error:', error.message);
     res.status(500).json({ error: 'Internal server error' });
@@ -1071,6 +1236,19 @@ app.get('/api/v1/orders', async (req, res) => {
 // 0d. Get Order by ID
 app.get('/api/v1/orders/:order_id', async (req, res) => {
   try {
+    if (databaseConnected && !useFallback) {
+      try {
+        const result = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.order_id]);
+        if (result.rows.length > 0) {
+          return res.json({ order: mapOrderRow(result.rows[0]) });
+        }
+      } catch (dbError) {
+        console.error('⚠️ Get order by ID from PostgreSQL failed, using fallback:', dbError.message);
+        databaseConnected = false;
+        useFallback = true;
+      }
+    }
+
     const order = (dbFallback.orders || []).find(o => o.id === req.params.order_id);
 
     if (!order) {
@@ -1088,6 +1266,82 @@ app.get('/api/v1/orders/:order_id', async (req, res) => {
 app.get('/api/v1/orders/stats/summary', async (req, res) => {
   try {
     const { period, date } = req.query;
+
+    if (databaseConnected && !useFallback) {
+      try {
+        const targetDate = date || new Date().toISOString().split('T')[0];
+        const isMonth = period === 'month';
+        const params = [targetDate];
+        const dateClause = isMonth
+          ? `to_char(created_at, 'YYYY-MM') = $1`
+          : `created_at::date = $1`;
+
+        const orderStats = await pool.query(
+          `SELECT
+             COUNT(*) AS order_count,
+             COALESCE(SUM(subtotal), 0) AS total_subtotal,
+             COALESCE(SUM(vat), 0) AS total_vat,
+             COALESCE(SUM(total), 0) AS total_revenue
+           FROM orders
+           WHERE status = 'confirmed' AND ${dateClause}`,
+          params
+        );
+
+        const orderCount = Number(orderStats.rows[0]?.order_count || 0);
+        if (orderCount > 0) {
+          const itemRows = await pool.query(
+            `SELECT
+               item->>'name' AS name,
+               COALESCE(SUM((item->>'quantity')::numeric), 0) AS quantity,
+               COALESCE(MAX((item->>'price')::numeric), 0) AS price,
+               COALESCE(SUM((item->>'price')::numeric * (item->>'quantity')::numeric), 0) AS revenue
+             FROM orders o,
+                  jsonb_array_elements(o.items) AS item
+             WHERE o.status = 'confirmed' AND ${dateClause}
+             GROUP BY item->>'name'
+             ORDER BY revenue DESC`,
+            params
+          );
+
+          return res.json({
+            order_count: orderCount,
+            total_subtotal: Number(orderStats.rows[0].total_subtotal || 0),
+            total_vat: Number(orderStats.rows[0].total_vat || 0),
+            total_revenue: Number(orderStats.rows[0].total_revenue || 0),
+            item_stats: itemRows.rows.map(r => ({
+              name: r.name,
+              quantity: Number(r.quantity || 0),
+              price: Number(r.price || 0),
+              revenue: Number(r.revenue || 0)
+            }))
+          });
+        }
+
+        const txStats = await pool.query(
+          `SELECT
+             COUNT(*) AS order_count,
+             COALESCE(SUM(amount), 0) AS total_revenue
+           FROM transactions
+           WHERE status = 'confirmed' AND ${dateClause}`,
+          params
+        );
+        const txRevenue = Number(txStats.rows[0]?.total_revenue || 0);
+        const txCount = Number(txStats.rows[0]?.order_count || 0);
+        const txVat = Math.round(txRevenue / 11);
+
+        return res.json({
+          order_count: txCount,
+          total_subtotal: Math.max(0, txRevenue - txVat),
+          total_vat: txVat,
+          total_revenue: txRevenue,
+          item_stats: []
+        });
+      } catch (dbError) {
+        console.error('⚠️ Summary stats PostgreSQL failed, using fallback:', dbError.message);
+        databaseConnected = false;
+        useFallback = true;
+      }
+    }
 
     let orders = (dbFallback.orders || []).filter(o => o.status === 'confirmed');
 
@@ -1143,6 +1397,65 @@ app.get('/api/v1/orders/stats/monthly', async (req, res) => {
   try {
     const { year } = req.query;
     const y = year || new Date().getFullYear().toString();
+
+    if (databaseConnected && !useFallback) {
+      try {
+        const months = Array.from({ length: 12 }, (_, i) => ({
+          month: i + 1,
+          label: `${String(i + 1).padStart(2, '0')}/${y}`,
+          revenue: 0,
+          order_count: 0
+        }));
+
+        const orderRows = await pool.query(
+          `SELECT
+             EXTRACT(MONTH FROM created_at)::int AS month,
+             COALESCE(SUM(total), 0) AS revenue,
+             COUNT(*) AS order_count
+           FROM orders
+           WHERE status = 'confirmed' AND EXTRACT(YEAR FROM created_at)::int = $1
+           GROUP BY EXTRACT(MONTH FROM created_at)
+           ORDER BY month`,
+          [Number(y)]
+        );
+
+        if (orderRows.rows.length > 0) {
+          orderRows.rows.forEach(r => {
+            const idx = Number(r.month) - 1;
+            if (idx >= 0 && idx < 12) {
+              months[idx].revenue = Number(r.revenue || 0);
+              months[idx].order_count = Number(r.order_count || 0);
+            }
+          });
+        } else {
+          const txRows = await pool.query(
+            `SELECT
+               EXTRACT(MONTH FROM created_at)::int AS month,
+               COALESCE(SUM(amount), 0) AS revenue,
+               COUNT(*) AS order_count
+             FROM transactions
+             WHERE status = 'confirmed' AND EXTRACT(YEAR FROM created_at)::int = $1
+             GROUP BY EXTRACT(MONTH FROM created_at)
+             ORDER BY month`,
+            [Number(y)]
+          );
+
+          txRows.rows.forEach(r => {
+            const idx = Number(r.month) - 1;
+            if (idx >= 0 && idx < 12) {
+              months[idx].revenue = Number(r.revenue || 0);
+              months[idx].order_count = Number(r.order_count || 0);
+            }
+          });
+        }
+
+        return res.json({ year: y, months });
+      } catch (dbError) {
+        console.error('⚠️ Monthly stats PostgreSQL failed, using fallback:', dbError.message);
+        databaseConnected = false;
+        useFallback = true;
+      }
+    }
 
     const orders = (dbFallback.orders || []).filter(o => {
       return o.status === 'confirmed' &&
@@ -1221,19 +1534,21 @@ app.get('/api/v1/devices', async (req, res) => {
 
     let devices = [];
 
-    try {
-      const result = await pool.query(
-        'SELECT id, location_name, status, last_heartbeat FROM devices'
-      );
-
-      devices = result.rows || [];
-
-      if (devices.length === 0) {
-        devices = getFallbackDevicesWithOfflineCheck();
+    if (databaseConnected && !useFallback) {
+      try {
+        await ensureDefaultDevicesInDb();
+        const result = await pool.query(
+          'SELECT id, location_name, status, last_heartbeat FROM devices ORDER BY id'
+        );
+        devices = result.rows || [];
+      } catch (dbError) {
+        console.error('⚠️ Devices PostgreSQL query failed, using fallback:', dbError.message);
+        databaseConnected = false;
+        useFallback = true;
       }
-    } catch (dbError) {
-      console.error('⚠️ Devices DB query failed, using fallback:', dbError.message);
-      useFallback = true;
+    }
+
+    if (!devices.length) {
       devices = getFallbackDevicesWithOfflineCheck();
     }
 
@@ -1347,6 +1662,48 @@ app.get('/api/v1/transactions', async (req, res) => {
   try {
     const { device_id, date_from, date_to } = req.query;
 
+    if (databaseConnected && !useFallback) {
+      try {
+        const where = [];
+        const params = [];
+        if (device_id) {
+          params.push(device_id);
+          where.push(`device_id = $${params.length}`);
+        }
+        if (date_from) {
+          params.push(date_from);
+          where.push(`created_at >= $${params.length}::timestamptz`);
+        }
+        if (date_to) {
+          params.push(`${date_to}T23:59:59.999Z`);
+          where.push(`created_at <= $${params.length}::timestamptz`);
+        }
+        const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+        const result = await pool.query(
+          `SELECT * FROM transactions ${whereSql} ORDER BY created_at DESC LIMIT 500`,
+          params
+        );
+
+        const transactions = result.rows.map(t => ({
+          ...t,
+          amount: Number(t.amount || 0)
+        }));
+        const dailyRevenue = transactions
+          .filter(t => t.status === 'confirmed')
+          .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
+        return res.json({
+          transactions,
+          total: transactions.length,
+          daily_revenue: dailyRevenue
+        });
+      } catch (dbError) {
+        console.error('⚠️ Transactions PostgreSQL query failed, using fallback:', dbError.message);
+        databaseConnected = false;
+        useFallback = true;
+      }
+    }
+
     let transactions = [...(dbFallback.transactions || [])];
 
     if (device_id) {
@@ -1423,12 +1780,7 @@ app.post('/api/v1/devices/heartbeat', async (req, res) => {
 
     ensureDefaultDevices();
 
-    try {
-      await updateDeviceStatus(device_id, status || 'online');
-    } catch (dbError) {
-      console.error('⚠️ Update device status via DB failed:', dbError.message);
-      useFallback = true;
-    }
+    await updateDeviceStatus(device_id, status || 'online');
 
     const device = setFallbackDeviceStatus(device_id, status || 'online');
 
@@ -1450,73 +1802,56 @@ app.post('/api/v1/devices/heartbeat', async (req, res) => {
 app.get('/api/v1/dashboard', async (req, res) => {
   try {
     ensureDefaultDevices();
+    if (databaseConnected && !useFallback) {
+      try {
+        await ensureDefaultDevicesInDb();
 
-    let devices = [];
+        const devicesResult = await pool.query(
+          'SELECT id, location_name, status, last_heartbeat FROM devices ORDER BY id'
+        );
+        const devices = devicesResult.rows || [];
 
-    try {
-      const devicesResult = await pool.query(
-        'SELECT id, location_name, status, last_heartbeat FROM devices'
-      );
+        const txStats = await pool.query(
+          `SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
+           FROM transactions
+           WHERE status = 'confirmed' AND created_at::date = CURRENT_DATE`
+        );
+        let dailyRevenue = Number(txStats.rows[0]?.total || 0);
+        let transactionCount = Number(txStats.rows[0]?.count || 0);
 
-      devices = devicesResult.rows || [];
+        if (transactionCount === 0) {
+          const orderStats = await pool.query(
+            `SELECT COALESCE(SUM(total), 0) AS total, COUNT(*) AS count
+             FROM orders
+             WHERE status = 'confirmed' AND created_at::date = CURRENT_DATE`
+          );
+          dailyRevenue = Number(orderStats.rows[0]?.total || 0);
+          transactionCount = Number(orderStats.rows[0]?.count || 0);
+        }
 
-      if (devices.length === 0) {
-        devices = getFallbackDevicesWithOfflineCheck();
+        return res.json({
+          devices,
+          daily_revenue: dailyRevenue,
+          transaction_count: transactionCount,
+          timestamp: new Date().toISOString()
+        });
+      } catch (dbError) {
+        console.error('⚠️ Dashboard PostgreSQL query failed, using fallback:', dbError.message);
+        databaseConnected = false;
+        useFallback = true;
       }
-    } catch (dbError) {
-      console.error('⚠️ Dashboard devices DB query failed, using fallback:', dbError.message);
-      useFallback = true;
-      devices = getFallbackDevicesWithOfflineCheck();
     }
 
-    const fallbackDevices = getFallbackDevicesWithOfflineCheck();
-
-    for (const fallbackDevice of fallbackDevices) {
-      const exists = devices.find(d => d.id === fallbackDevice.id);
-
-      if (!exists) {
-        devices.push(fallbackDevice);
-      }
-    }
-
+    const devices = getFallbackDevicesWithOfflineCheck();
     const today = new Date().toISOString().split('T')[0];
+    const todayOrders = (dbFallback.orders || []).filter(order => {
+      return order.status === 'confirmed' && order.created_at && order.created_at.startsWith(today);
+    });
 
-    let dailyRevenue = 0;
-    let transactionCount = 0;
-
-    try {
-      const revenueResult = await pool.query(
-        `SELECT SUM(amount) as total FROM transactions 
-         WHERE status = $1 AND created_at::date = $2`,
-        ['confirmed', today]
-      );
-
-      const countResult = await pool.query(
-        `SELECT COUNT(*) as count FROM transactions 
-         WHERE status = $1 AND created_at::date = $2`,
-        ['confirmed', today]
-      );
-
-      dailyRevenue = parseFloat(revenueResult.rows[0]?.total) || 0;
-      transactionCount = parseInt(countResult.rows[0]?.count) || 0;
-    } catch (dbError) {
-      console.error('⚠️ Dashboard stats DB query failed, using fallback:', dbError.message);
-      useFallback = true;
-
-      const todayOrders = (dbFallback.orders || []).filter(order => {
-        return order.status === 'confirmed' &&
-          order.created_at &&
-          order.created_at.startsWith(today);
-      });
-
-      dailyRevenue = todayOrders.reduce((sum, order) => sum + Number(order.total || 0), 0);
-      transactionCount = todayOrders.length;
-    }
-
-    res.json({
+    return res.json({
       devices,
-      daily_revenue: dailyRevenue,
-      transaction_count: transactionCount,
+      daily_revenue: todayOrders.reduce((sum, order) => sum + Number(order.total || 0), 0),
+      transaction_count: todayOrders.length,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -1541,15 +1876,26 @@ function verifyApiKey(deviceId, apiKey) {
 async function updateDeviceStatus(deviceId, status) {
   try {
     ensureDefaultDevices();
-
-    await pool.query(
-      'UPDATE devices SET status = $1, last_heartbeat = $2 WHERE id = $3',
-      [status, new Date(), deviceId]
-    );
+    if (databaseConnected && !useFallback) {
+      await ensureDefaultDevicesInDb();
+      await pool.query(
+        `INSERT INTO devices (id, location_name, status, last_heartbeat, config)
+         VALUES ($1, $2, $3, NOW(), $4::jsonb)
+         ON CONFLICT (id) DO UPDATE
+         SET status = EXCLUDED.status, last_heartbeat = NOW()`,
+        [
+          deviceId,
+          deviceId === 'store_001' ? 'Quầy Thu Ngân 1' : deviceId,
+          status,
+          JSON.stringify({ model: 'ESP32-DevKit' })
+        ]
+      );
+    }
 
     setFallbackDeviceStatus(deviceId, status);
   } catch (error) {
     console.error('Update device status error:', error.message);
+    databaseConnected = false;
     useFallback = true;
     setFallbackDeviceStatus(deviceId, status);
   }
@@ -1571,6 +1917,22 @@ async function queueNotification(deviceId, transactionCode, amount) {
 
     dbFallback.notification_queue.push(newNotif);
     saveFallback();
+
+    if (databaseConnected && !useFallback) {
+      try {
+        await pool.query(
+          `INSERT INTO notification_queue
+            (id, device_id, transaction_code, amount, status, created_at)
+           VALUES
+            ($1, $2, $3, $4, $5, $6)`,
+          [notificationId, deviceId, transactionCode, parseFloat(amount), 'pending', new Date().toISOString()]
+        );
+      } catch (dbError) {
+        console.error('⚠️ Notification insert PostgreSQL failed:', dbError.message);
+        databaseConnected = false;
+        useFallback = true;
+      }
+    }
 
     const ws = deviceConnections.get(deviceId);
 
@@ -1600,7 +1962,7 @@ async function markNotificationAsSent(notificationId) {
       saveFallback();
     }
 
-    if (!useFallback) {
+    if (databaseConnected && !useFallback) {
       await pool.query(
         'UPDATE notification_queue SET status = $1, sent_at = $2 WHERE id = $3',
         ['sent', new Date(), notificationId]
@@ -1608,6 +1970,8 @@ async function markNotificationAsSent(notificationId) {
     }
   } catch (error) {
     console.error('Mark notification as sent error:', error.message);
+    databaseConnected = false;
+    useFallback = true;
   }
 }
 
