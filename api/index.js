@@ -850,6 +850,12 @@ app.post('/api/test-mqtt', async (req, res) => {
   }
 });
 
+function normalizeOrderText(value) {
+  return String(value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+}
+
 // 0. SePay Webhook
 async function handleSepayWebhook(req, res) {
   try {
@@ -859,6 +865,10 @@ async function handleSepayWebhook(req, res) {
     const amount = Number(payload.transferAmount || payload.amount || 0);
     const transferType = payload.transferType || payload.type || '';
     const txnCode = payload.referenceCode || payload.content || `SEPAY_${payload.id || Date.now()}`;
+    const rawContent = payload.content || '';
+    const rawRef = payload.referenceCode || '';
+    const combinedText = `${rawContent} ${rawRef}`;
+    const normalizedWebhookText = normalizeOrderText(combinedText);
 
     if (transferType !== 'in' || amount <= 0) {
       return res.json({
@@ -876,8 +886,8 @@ async function handleSepayWebhook(req, res) {
       transactionDate: payload.transactionDate || new Date().toISOString(),
       transferAmount: amount,
       amount,
-      content: payload.content || txnCode,
-      referenceCode: txnCode,
+      content: rawContent || txnCode,
+      referenceCode: rawRef || txnCode,
       txnCode
     };
 
@@ -905,7 +915,8 @@ async function handleSepayWebhook(req, res) {
       existingTx.confirmed_at = new Date().toISOString();
       existingTx.bank_reference_id = String(payload.id || '');
       existingTx.gateway = payload.gateway || 'SEPAY';
-      existingTx.content = payload.content || txnCode;
+      existingTx.content = rawContent;
+      existingTx.referenceCode = rawRef;
       existingTx.transaction_code = txnCode;
       console.log(`✅ Existing transaction ${txnCode} updated to confirmed in fallback DB`);
     } else {
@@ -917,7 +928,8 @@ async function handleSepayWebhook(req, res) {
         status: 'confirmed',
         gateway: payload.gateway || 'SEPAY',
         bank_reference_id: String(payload.id || ''),
-        content: payload.content || txnCode,
+        content: rawContent,
+        referenceCode: rawRef,
         confirmed_at: new Date().toISOString(),
         created_at: new Date().toISOString()
       });
@@ -926,19 +938,24 @@ async function handleSepayWebhook(req, res) {
 
     if (!dbFallback.orders) dbFallback.orders = [];
 
-    const pendingOrder = dbFallback.orders.find(o => (
-      o.status === 'pending' && (
-        o.transaction_code === txnCode ||
-        o.referenceCode === txnCode ||
-        Math.abs(Number(o.total || 0) - amount) < 1
-      )
-    ));
+    const pendingOrder = dbFallback.orders.find(o => {
+      const orderCode = o.transaction_code || o.txnCode || o.referenceCode || '';
+      const normalizedOrderCode = normalizeOrderText(orderCode);
+
+      const amountMatched = Math.abs(Number(o.total || 0) - amount) < 1;
+      const codeMatched = normalizedOrderCode && normalizedWebhookText.includes(normalizedOrderCode);
+
+      return o.status === 'pending' && (codeMatched || amountMatched);
+    });
 
     if (pendingOrder) {
       pendingOrder.status = 'confirmed';
-      pendingOrder.transaction_code = txnCode;
+      pendingOrder.transaction_code = pendingOrder.transaction_code || txnCode;
       pendingOrder.confirmed_at = new Date().toISOString();
       pendingOrder.payment_gateway = payload.gateway || 'SEPAY';
+      pendingOrder.bank_reference_id = String(payload.id || '');
+      pendingOrder.webhook_content = rawContent;
+      pendingOrder.webhook_reference_code = rawRef;
       console.log(`✅ Order ${pendingOrder.id} auto-confirmed via webhook`);
     }
 
