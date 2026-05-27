@@ -342,6 +342,40 @@ let dbFallback = {
   orders: []
 };
 
+async function checkDatabaseConnection() {
+  if (!DATABASE_URL) {
+    databaseConnected = false;
+    useFallback = true;
+    return false;
+  }
+
+  try {
+    await pool.query('SELECT 1 as ok');
+    databaseConnected = true;
+    useFallback = false;
+    return true;
+  } catch (error) {
+    console.error('Database health check failed:', error.message);
+    databaseConnected = false;
+    useFallback = true;
+    return false;
+  }
+}
+
+async function canUseDatabase() {
+  if (databaseConnected && !useFallback) {
+    return true;
+  }
+
+  if (!DATABASE_URL) {
+    databaseConnected = false;
+    useFallback = true;
+    return false;
+  }
+
+  return checkDatabaseConnection();
+}
+
 function saveFallback() {
   // On Vercel serverless, filesystem is read-only / ephemeral.
   // Giữ dữ liệu trong memory cho request hiện tại.
@@ -898,8 +932,9 @@ app.get('/', (req, res) => {
 });
 
 // Health check endpoint
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
   ensureDefaultDevices();
+  const dbOk = await checkDatabaseConnection();
 
   res.json({
     ok: true,
@@ -912,14 +947,14 @@ app.get('/api/health', (req, res) => {
       clientId: `backend-server-${STORE_ID}`
     },
     database: {
-      connected: databaseConnected,
-      usingFallback: useFallback,
+      connected: dbOk,
+      usingFallback: !dbOk,
       hasDatabaseUrl: Boolean(DATABASE_URL)
     },
     fallback: {
-      enabled: useFallback,
+      enabled: !dbOk,
       device_count: dbFallback.devices.length,
-      devices: getFallbackDevicesWithOfflineCheck()
+      devices: dbFallback.devices
     }
   });
 });
@@ -1019,7 +1054,7 @@ async function handleSepayWebhook(req, res) {
       console.error('❌ Payment incoming MQTT failed:', mqttError.message);
     }
 
-    if (databaseConnected && !useFallback) {
+    if (await canUseDatabase()) {
       try {
         await pool.query(
           `INSERT INTO transactions
@@ -1183,7 +1218,7 @@ app.post('/api/v1/orders', async (req, res) => {
       created_at: new Date().toISOString()
     };
 
-    if (databaseConnected && !useFallback) {
+    if (await canUseDatabase()) {
       try {
         await ensureDefaultDevicesInDb();
         const orderResult = await pool.query(
@@ -1249,7 +1284,7 @@ app.get('/api/v1/orders', async (req, res) => {
   try {
     const { status, date } = req.query;
 
-    if (databaseConnected && !useFallback) {
+    if (await canUseDatabase()) {
       try {
         const where = [];
         const params = [];
@@ -1300,7 +1335,7 @@ app.get('/api/v1/orders', async (req, res) => {
 // 0d. Get Order by ID
 app.get('/api/v1/orders/:order_id', async (req, res) => {
   try {
-    if (databaseConnected && !useFallback) {
+    if (await canUseDatabase()) {
       try {
         const result = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.order_id]);
         if (result.rows.length > 0) {
@@ -1331,7 +1366,7 @@ app.get('/api/v1/orders/stats/summary', async (req, res) => {
   try {
     const { period, date } = req.query;
 
-    if (databaseConnected && !useFallback) {
+    if (await canUseDatabase()) {
       try {
         const targetDate = date || new Date().toISOString().split('T')[0];
         const isMonth = period === 'month';
@@ -1462,7 +1497,7 @@ app.get('/api/v1/orders/stats/monthly', async (req, res) => {
     const { year } = req.query;
     const y = year || new Date().getFullYear().toString();
 
-    if (databaseConnected && !useFallback) {
+    if (await canUseDatabase()) {
       try {
         const months = Array.from({ length: 12 }, (_, i) => ({
           month: i + 1,
@@ -1598,7 +1633,7 @@ app.get('/api/v1/devices', async (req, res) => {
 
     let devices = [];
 
-    if (databaseConnected && !useFallback) {
+    if (await canUseDatabase()) {
       try {
         await ensureDefaultDevicesInDb();
         const result = await pool.query(
@@ -1726,7 +1761,7 @@ app.get('/api/v1/transactions', async (req, res) => {
   try {
     const { device_id, date_from, date_to } = req.query;
 
-    if (databaseConnected && !useFallback) {
+    if (await canUseDatabase()) {
       try {
         const where = [];
         const params = [];
@@ -1866,7 +1901,7 @@ app.post('/api/v1/devices/heartbeat', async (req, res) => {
 app.get('/api/v1/dashboard', async (req, res) => {
   try {
     ensureDefaultDevices();
-    if (databaseConnected && !useFallback) {
+    if (await canUseDatabase()) {
       try {
         await ensureDefaultDevicesInDb();
 
@@ -1963,7 +1998,7 @@ function verifyApiKey(deviceId, apiKey) {
 async function updateDeviceStatus(deviceId, status) {
   try {
     ensureDefaultDevices();
-    if (databaseConnected && !useFallback) {
+    if (await canUseDatabase()) {
       await ensureDefaultDevicesInDb();
       await pool.query(
         `INSERT INTO devices (id, location_name, status, last_heartbeat, config)
@@ -2005,7 +2040,7 @@ async function queueNotification(deviceId, transactionCode, amount) {
     dbFallback.notification_queue.push(newNotif);
     saveFallback();
 
-    if (databaseConnected && !useFallback) {
+    if (await canUseDatabase()) {
       try {
         await pool.query(
           `INSERT INTO notification_queue
@@ -2049,7 +2084,7 @@ async function markNotificationAsSent(notificationId) {
       saveFallback();
     }
 
-    if (databaseConnected && !useFallback) {
+    if (await canUseDatabase()) {
       await pool.query(
         'UPDATE notification_queue SET status = $1, sent_at = $2 WHERE id = $3',
         ['sent', new Date(), notificationId]
