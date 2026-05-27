@@ -1,5 +1,8 @@
 import axios from 'axios';
 
+// API Configuration
+// Production: Uses relative path /api/v1 (resolves to https://esp32-ruddy.vercel.app/api/v1)
+// Development: Uses proxy to localhost:8081 (configured in package.json)
 const API_BASE_URL = process.env.REACT_APP_API_URL || '/api/v1';
 
 const api = axios.create({
