@@ -29,6 +29,13 @@ const SEPAY_API_KEY = process.env.SEPAY_API_KEY || 'your_sepay_api_key';
 const MQTT_BROKER_URL = process.env.MQTT_BROKER_URL || 'mqtt://broker.hivemq.com:1883';
 const STORE_ID = process.env.STORE_ID || 'store_001';
 
+// Log startup configuration
+console.log('🚀 Starting Payment Notification System...');
+console.log('📡 MQTT Configuration:');
+console.log('   Broker URL:', MQTT_BROKER_URL);
+console.log('   Store ID:', STORE_ID);
+console.log('   Environment:', process.env.VERCEL ? 'Vercel Serverless' : 'Local Development');
+
 // ============ MQTT HELPER FUNCTION (for Vercel Serverless) ============
 function publishMqttOnce(topic, payload) {
   return new Promise((resolve, reject) => {
@@ -735,11 +742,13 @@ app.post('/api/v1/orders', async (req, res) => {
     const mqttMsg = { 
       id: orderId, 
       device_id: STORE_ID,
+      amount: total,
+      txnCode: txnCode,
       transferAmount: total, 
       content: txnCode, 
+      referenceCode: txnCode,
       gateway: 'POS', 
-      transactionDate: newOrder.created_at, 
-      referenceCode: txnCode 
+      transactionDate: newOrder.created_at
     };
     
     const mqttTopic = `payment/${STORE_ID}/new_order`;
