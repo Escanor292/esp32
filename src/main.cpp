@@ -433,15 +433,23 @@ void initMQTT() {
     if (mqttClient.connect(MQTT_CLIENT_ID)) {
       Serial.println("✅ MQTT connected!");
       
-      // Subscribe to payment topic
+      // Subscribe to payment notification topic
       if (mqttClient.subscribe(MQTT_TOPIC)) {
         Serial.print("✅ Subscribed to: ");
         Serial.println(MQTT_TOPIC);
-        isMqttConnected = true;
-        currentState = STATE_IDLE;
-        displayIdleScreen();
-        return;
       }
+      
+      // Subscribe to new order topic (for QR display)
+      String newOrderTopic = String("payment/") + STORE_ID + "/new_order";
+      if (mqttClient.subscribe(newOrderTopic.c_str())) {
+        Serial.print("✅ Subscribed to: ");
+        Serial.println(newOrderTopic);
+      }
+      
+      isMqttConnected = true;
+      currentState = STATE_IDLE;
+      displayIdleScreen();
+      return;
     } else {
       Serial.print("❌ Failed, rc=");
       Serial.print(mqttClient.state());
@@ -784,8 +792,53 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     return;
   }
   
-  // Handle payment notification
-  handlePaymentNotification(message);
+  // Check topic type
+  String topicStr = String(topic);
+  
+  if (topicStr.endsWith("/new_order")) {
+    // Handle new order - Display QR code
+    Serial.println("📦 New order received - Displaying QR code");
+    
+    long amount = doc["transferAmount"] | 0;
+    String txnCode = doc["referenceCode"] | "";
+    
+    // Display order info with QR code
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    
+    // Title
+    display.setCursor(0, 0);
+    display.println("DON HANG MOI");
+    display.drawFastHLine(0, 10, 128, SSD1306_WHITE);
+    
+    // Amount
+    display.setCursor(0, 15);
+    display.print("So tien: ");
+    display.print(amount);
+    display.println("d");
+    
+    // Transaction code
+    display.setCursor(0, 25);
+    display.print("Ma: ");
+    display.println(txnCode);
+    
+    // QR Code (right side)
+    String qrData = "https://sepay.vn/qr/" + txnCode;
+    displayQRCode(qrData.c_str(), 70, 35, 1);
+    
+    display.display();
+    
+    Serial.println("✅ QR Code displayed on OLED");
+    
+    // Auto return to idle after 30 seconds
+    delay(30000);
+    displayIdleScreen();
+    
+  } else if (topicStr.endsWith("/incoming")) {
+    // Handle payment notification
+    handlePaymentNotification(message);
+  }
 }
 
 void handlePaymentNotification(const char* json) {
