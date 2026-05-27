@@ -22,7 +22,10 @@ const DB_USER = process.env.DB_USER || 'postgres';
 const DB_PASSWORD = process.env.DB_PASSWORD || '';
 const DB_NAME = process.env.DB_NAME || 'payment_system';
 const DB_PORT = process.env.DB_PORT || 5432;
-const DATABASE_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL || '';
+const DATABASE_URL =
+  process.env.DATABASE_URL ||
+  process.env.POSTGRES_URL ||
+  'postgresql://neondb_owner:npg_UHY8oPKOlAR2@ep-curly-block-ao7c2dko-pooler.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require';
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 
 // ============ SEPAY & MQTT CONFIG ============
@@ -185,26 +188,15 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 
 // ============ DATABASE SETUP (PostgreSQL) ============
-const pool = DATABASE_URL
-  ? new Pool({
-      connectionString: DATABASE_URL,
-      ssl: {
-        rejectUnauthorized: false
-      },
-      max: 5,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000
-    })
-  : new Pool({
-      host: DB_HOST,
-      user: DB_USER,
-      password: DB_PASSWORD,
-      database: DB_NAME,
-      port: DB_PORT,
-      max: 5,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000
-    });
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  },
+  max: 5,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000
+});
 
 pool.on('error', (err) => {
   console.error('Unexpected error on idle client', err);
@@ -276,6 +268,69 @@ function mapOrderRow(row) {
     confirmed_at: row.confirmed_at,
     created_at: row.created_at
   };
+}
+
+async function initDatabaseTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS devices (
+      id TEXT PRIMARY KEY,
+      location_name TEXT NOT NULL,
+      status TEXT DEFAULT 'offline',
+      last_heartbeat TIMESTAMPTZ,
+      config JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS transactions (
+      id TEXT PRIMARY KEY,
+      device_id TEXT DEFAULT 'store_001',
+      transaction_code TEXT,
+      amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      status TEXT DEFAULT 'pending',
+      gateway TEXT,
+      bank_reference_id TEXT,
+      content TEXT,
+      reference_code TEXT,
+      description TEXT,
+      expires_at TIMESTAMPTZ,
+      confirmed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS orders (
+      id TEXT PRIMARY KEY,
+      transaction_code TEXT UNIQUE,
+      store_name TEXT,
+      items JSONB DEFAULT '[]'::jsonb,
+      subtotal NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      vat NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      total NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      status TEXT DEFAULT 'pending',
+      payment_gateway TEXT,
+      bank_reference_id TEXT,
+      webhook_content TEXT,
+      webhook_reference_code TEXT,
+      confirmed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS notification_queue (
+      id TEXT PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      transaction_code TEXT,
+      amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      status TEXT DEFAULT 'pending',
+      sent_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    INSERT INTO devices (id, location_name, status, config)
+    VALUES
+      ('store_001', 'Quầy Thu Ngân 1', 'offline', '{"model":"ESP32-DevKit"}'),
+      ('store_002', 'Quầy Pha Chế 2', 'offline', '{"model":"ESP32-DevKit"}'),
+      ('store_003', 'Quầy Mang Về (Takeaway)', 'offline', '{"model":"ESP32-DevKit"}')
+    ON CONFLICT (id) DO NOTHING;
+  `);
 }
 
 let useFallback = false;
@@ -633,6 +688,15 @@ pool.connect((err, client, release) => {
     databaseConnected = true;
     useFallback = false;
     release();
+    initDatabaseTables()
+      .then(() => {
+        console.log('✅ PostgreSQL tables initialized');
+      })
+      .catch((initErr) => {
+        console.error('⚠️ PostgreSQL init tables failed:', initErr.message);
+        databaseConnected = false;
+        useFallback = true;
+      });
   }
 });
 // ============ REDIS SETUP ============
@@ -850,7 +914,7 @@ app.get('/api/health', (req, res) => {
     database: {
       connected: databaseConnected,
       usingFallback: useFallback,
-      hasDatabaseUrl: Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL)
+      hasDatabaseUrl: Boolean(DATABASE_URL)
     },
     fallback: {
       enabled: useFallback,
@@ -1857,6 +1921,29 @@ app.get('/api/v1/dashboard', async (req, res) => {
   } catch (error) {
     console.error('Get dashboard data error:', error.message);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/init-db', async (req, res) => {
+  try {
+    await initDatabaseTables();
+    databaseConnected = true;
+    useFallback = false;
+
+    res.json({
+      success: true,
+      message: 'Database initialized',
+      tables: ['devices', 'transactions', 'orders', 'notification_queue']
+    });
+  } catch (error) {
+    console.error('Init DB error:', error);
+    databaseConnected = false;
+    useFallback = true;
+
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 // ============ HELPER FUNCTIONS ============
