@@ -102,6 +102,12 @@ unsigned long qrDisplayStartTime = 0;
 
 bool isPlayingAudio = false;
 
+// Idle screen animation variables
+bool isIdleScreen = true;
+unsigned long lastIdleAnim = 0;
+int wifiPulseStep = 0;
+int rocketX = 0;
+
 // ============ FUNCTION DECLARATIONS ============
 void initDisplay();
 void initAudio();
@@ -120,7 +126,10 @@ void displayConnecting(const char* message);
 void displayIdleScreen();
 void displayTransactionInfo(const Transaction& txn);
 void displayQRCode(const char* qrData, int xOffset = QR_X, int yOffset = QR_Y, int scale = QR_SCALE);
+void displayQRCodeAt(const char* text, int startX, int startY, int scale);
 void displayNewOrderQR(long amount, const String& txnCode, const String& qrData = "");
+void updateIdleAnimation();
+void drawIdleFrame();
 
 void configModeCallback(WiFiManager *myWiFiManager);
 
@@ -295,6 +304,8 @@ void loop() {
       displayIdleScreen();
     }
   }
+
+  updateIdleAnimation();
 
   updateState();
   handleStateTransition();
@@ -574,35 +585,68 @@ void displayConnecting(const char* message) {
 }
 
 void displayIdleScreen() {
+  isIdleScreen = true;
+  wifiPulseStep = 0;
+  rocketX = 0;
+  drawIdleFrame();
+}
+
+void updateIdleAnimation() {
+  if (!isIdleScreen) return;
+  if (millis() - lastIdleAnim < 400) return;
+  lastIdleAnim = millis();
+
+  wifiPulseStep++;
+  if (wifiPulseStep > 3) wifiPulseStep = 0;
+
+  rocketX += 6;
+  if (rocketX > 110) rocketX = 0;
+
+  drawIdleFrame();
+}
+
+void drawIdleFrame() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
+  // GROUP title
   display.setTextSize(2);
-  display.setCursor(10, 5);
-  display.println("SEPAY");
+  display.setCursor(34, 0);
+  display.println("GROUP");
 
+  // Connection status
   display.setTextSize(1);
-  display.setCursor(15, 25);
-  display.println("HE THONG");
+  bool wifiOk = (WiFi.status() == WL_CONNECTED);
+  bool mqttOk = mqttClient.connected();
 
-  display.setCursor(5, 35);
-  display.println("THANH TOAN");
-
-  display.drawFastHLine(0, 48, 128, SSD1306_WHITE);
-
-  display.setCursor(10, 52);
-  display.println("Trang thai:");
-
-  display.setCursor(75, 52);
-  if (WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
-    display.println("ONLINE");
+  display.setCursor(0, 20);
+  display.print("WIFI:");
+  if (wifiOk) {
+    display.print("OK");
   } else {
-    display.println("OFFLINE");
+    display.print("ERR");
   }
 
-  display.display();
+  display.setCursor(64, 20);
+  display.print("MQTT:");
+  if (mqttOk) {
+    display.print("OK");
+  } else {
+    display.print("ERR");
+  }
 
-  Serial.println("Idle screen displayed - Waiting for orders");
+  // WiFi pulse animation
+  display.setCursor(0, 32);
+  display.print("WiFi:");
+  for (int i = 0; i <= wifiPulseStep; i++) {
+    display.print(")");
+  }
+
+  // Rocket animation
+  display.setCursor(rocketX, 48);
+  display.print("^");
+
+  display.display();
 }
 
 void displayTransactionInfo(const Transaction& txn) {
@@ -651,27 +695,62 @@ void displayQRCode(const char* text, int xOffset, int yOffset, int scale) {
 
   qrcode_initText(&qrcode, qrcodeData, qrVersion, ECC_LOW, text);
 
-  Serial.print("QR Version: ");
-  Serial.println(qrVersion);
-  Serial.print("QR size: ");
-  Serial.println(qrcode.size);
+  int qrModuleSize = qrcode.size;
+  int qrPixelSize = qrModuleSize * scale;
 
-  int qrPixelSize = qrcode.size * scale;
-  if (qrPixelSize > 128) {
-    Serial.println("WARNING: QR too wide for display");
-  }
-
-  Serial.print("QR Scale: ");
-  Serial.println(scale);
+  Serial.print("QR Buffer Size: ");
+  Serial.println(qrcode_getBufferSize(qrVersion));
+  Serial.print("QR Module Size: ");
+  Serial.println(qrModuleSize);
+  Serial.print("QR Pixel Size: ");
+  Serial.println(qrPixelSize);
   Serial.print("QR X: ");
   Serial.println(xOffset);
   Serial.print("QR Y: ");
   Serial.println(yOffset);
 
-  for (uint8_t qy = 0; qy < qrcode.size; qy++) {
-    for (uint8_t qx = 0; qx < qrcode.size; qx++) {
-      if (qrcode_getModule(&qrcode, qx, qy)) {
-        display.fillRect(xOffset + qx * scale, yOffset + qy * scale, scale, scale, SSD1306_WHITE);
+  for (uint8_t y = 0; y < qrcode.size; y++) {
+    for (uint8_t x = 0; x < qrcode.size; x++) {
+      if (qrcode_getModule(&qrcode, x, y)) {
+        display.fillRect(xOffset + x * scale, yOffset + y * scale, scale, scale, SSD1306_WHITE);
+      }
+    }
+  }
+}
+
+void displayQRCodeAt(const char* text, int startX, int startY, int scale) {
+  if (!text || strlen(text) == 0) {
+    Serial.println("QR text empty");
+    return;
+  }
+
+  int len = strlen(text);
+  Serial.print("QR Data length: ");
+  Serial.println(len);
+
+  const uint8_t qrVersion = QR_VERSION;
+  uint8_t qrcodeData[qrcode_getBufferSize(qrVersion)];
+  QRCode qrcode;
+
+  qrcode_initText(&qrcode, qrcodeData, qrVersion, ECC_LOW, text);
+
+  int qrModuleSize = qrcode.size;
+  int qrPixelSize = qrModuleSize * scale;
+
+  Serial.println("QR right layout mode");
+  Serial.print("QR Module Size: ");
+  Serial.println(qrModuleSize);
+  Serial.print("QR X: ");
+  Serial.println(startX);
+  Serial.print("QR Y: ");
+  Serial.println(startY);
+  Serial.print("QR Scale: ");
+  Serial.println(scale);
+
+  for (uint8_t y = 0; y < qrcode.size; y++) {
+    for (uint8_t x = 0; x < qrcode.size; x++) {
+      if (qrcode_getModule(&qrcode, x, y)) {
+        display.fillRect(startX + x * scale, startY + y * scale, scale, scale, SSD1306_WHITE);
       }
     }
   }
@@ -685,34 +764,66 @@ void displayNewOrderQR(long amount, const String& txnCode, const String& qrData)
   String finalQrData;
 
   if (qrData.length() > 0) {
-    // Use backend qrData (VietQR/EMVCo standard) - full screen QR only
+    // Use backend qrData (VietQR/EMVCo standard) - right layout
     finalQrData = qrData;
-    Serial.println("QR full screen mode");
+    Serial.println("QR right layout mode");
     Serial.println("QR Data source: backend qrData");
     Serial.print("QR Data length: ");
     Serial.println(finalQrData.length());
 
-    // Calculate QR size and center it
-    int qrSize = qrcode_getBufferSize(QR_VERSION);
-    Serial.print("QR Version: ");
-    Serial.println(QR_VERSION);
-    Serial.print("QR Size: ");
-    Serial.println(qrSize);
+    // Initialize QR to get actual module size
+    const uint8_t qrVersion = QR_VERSION;
+    uint8_t qrcodeData[qrcode_getBufferSize(qrVersion)];
+    QRCode qrcode;
+    qrcode_initText(&qrcode, qrcodeData, qrVersion, ECC_LOW, finalQrData.c_str());
 
-    // Center QR on screen (128x64)
-    // QR size in pixels = qrSize * scale (scale = 1)
-    // Center horizontally: (128 - qrSize) / 2
-    // Center vertically: (64 - qrSize) / 2
-    int qrX = (128 - qrSize) / 2;
-    int qrY = (64 - qrSize) / 2;
+    int qrModuleSize = qrcode.size;
+    int qrPixelSize = qrModuleSize * 1; // scale = 1
 
-    // If QR is too wide, center vertically but start from left
-    if (qrX < 0) {
-      qrX = 0;
-      qrY = (64 - qrSize) / 2;
+    Serial.print("QR Module Size: ");
+    Serial.println(qrModuleSize);
+
+    // Calculate QR position on the right side
+    int qrX = 70;
+    if (qrModuleSize > 58) {
+      qrX = 128 - qrModuleSize;
     }
+    int qrY = max(0, (64 - qrPixelSize) / 2);
 
-    displayQRCode(finalQrData.c_str(), qrX, qrY, 1);
+    Serial.print("QR X: ");
+    Serial.println(qrX);
+    Serial.print("QR Y: ");
+    Serial.println(qrY);
+
+    // Draw left side text (x from 0 to 66)
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+
+    display.setCursor(0, 0);
+    display.println("TIEN");
+
+    display.setCursor(0, 12);
+    display.println(formatAmount(amount));
+
+    display.setCursor(0, 30);
+    display.println("MA");
+
+    // Shorten transaction code to 6-8 chars
+    String shortTxnCode = txnCode;
+    if (txnCode.length() > 8) {
+      shortTxnCode = txnCode.substring(txnCode.length() - 8);
+    }
+    display.setCursor(0, 42);
+    display.println(shortTxnCode);
+
+    // Draw QR on the right side
+    for (uint8_t y = 0; y < qrcode.size; y++) {
+      for (uint8_t x = 0; x < qrcode.size; x++) {
+        if (qrcode_getModule(&qrcode, x, y)) {
+          display.fillRect(qrX + x * 1, qrY + y * 1, 1, 1, SSD1306_WHITE);
+        }
+      }
+    }
   } else {
     // Fallback to old format if backend didn't send qrData - full screen layout with text
     finalQrData = String(BANK_CODE) + "|" + String(BANK_ACCOUNT) + "|" + String(amount) + "|" + txnCode;
@@ -807,6 +918,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 }
 
 void handleNewOrder(const char* json) {
+  isIdleScreen = false;
+
   StaticJsonDocument<1024> doc;
   DeserializationError error = deserializeJson(doc, json);
 

@@ -575,6 +575,11 @@ app.post('/api/v1/orders', async (req, res) => {
     const orderId = uuidv4();
     const txnCode = `ORDER_${Date.now().toString(36).toUpperCase()}`;
 
+    // Generate VietQR/EMVCo standard QR data
+    const bankCode = 'MBBank';
+    const accountNumber = '0932299701';
+    const qrData = generateVietQRData(bankCode, accountNumber, total, txnCode);
+
     const newOrder = {
       id: orderId,
       transaction_code: txnCode,
@@ -585,7 +590,8 @@ app.post('/api/v1/orders', async (req, res) => {
       total,
       status: 'pending',
       confirmed_at: null,
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      qrData: qrData
     };
 
     if (useFallback) {
@@ -594,8 +600,21 @@ app.post('/api/v1/orders', async (req, res) => {
     }
 
     // Push QR hint via MQTT so ESP32 can update its display
-    const mqttMsg = { id: orderId, transferAmount: total, content: txnCode, gateway: 'POS', transactionDate: newOrder.created_at, referenceCode: txnCode };
+    const mqttMsg = {
+      id: orderId,
+      transferAmount: total,
+      amount: total,
+      content: txnCode,
+      gateway: 'POS',
+      transactionDate: newOrder.created_at,
+      referenceCode: txnCode,
+      txnCode: txnCode,
+      qrData: qrData
+    };
     mqttClient.publish(`payment/${STORE_ID}/new_order`, JSON.stringify(mqttMsg), { qos: 1 });
+
+    console.log(`✅ Order created with VietQR: ${txnCode}, Amount: ${total}`);
+    console.log(`📱 QR Data length: ${qrData.length} chars`);
 
     res.json({ success: true, order: newOrder });
   } catch (error) {
@@ -917,6 +936,108 @@ function generateTransactionCode() {
   const timestamp = Date.now().toString(36).toUpperCase();
   const random = Math.random().toString(36).substring(2, 8).toUpperCase();
   return `TXN${timestamp}${random}`;
+}
+
+// Generate VietQR/EMVCo standard QR data string
+function generateVietQRData(bankCode, accountNumber, amount, content) {
+  // Bank BIN mapping for Vietnam banks
+  const bankBINs = {
+    'MBBank': '970422',
+    'VCB': '970436',
+    'TCB': '970403',
+    'STB': '970443',
+    'ACB': '970448',
+    'VTB': '970418',
+    'BIDV': '970432',
+    'AGRIBANK': '970405',
+    'VIB': '970441',
+    'OCB': '970448',
+    'TPB': '970423',
+    'MSB': '970426',
+    'NAB': '970415',
+    'CIMB': '970431',
+    'KB': '970438',
+    'SHB': '970444',
+    'SAIGONBANK': '970437',
+    'BACABANK': '970419',
+    'KEP': '970429',
+    'PB': '970428',
+    'VIETCAPITAL': '970452',
+    'OCEAN': '970414',
+    'CBB': '970421'
+  };
+
+  const bin = bankBINs[bankCode] || '970422'; // Default to MBBank if not found
+
+  // Build EMVCo QR data following VietQR standard
+  // Format: Tag-Length-Value (TLV)
+  
+  let qrData = '';
+  
+  // 00: Payload Format Indicator (01 = EMVCo)
+  qrData += '000201';
+  
+  // 01: Point of Initiation Method (12 = dynamic with amount)
+  qrData += '010212';
+  
+  // 26-31: Merchant Account Information (Consumer Data)
+  let merchantInfo = '';
+  // 00: Global Unique Identifier (VietQR: VN VNPay)
+  merchantInfo += '0006VN VNPay';
+  // 01: Bank BIN
+  merchantInfo += `01${String(bin.length).padStart(2, '0')}${bin}`;
+  // 02: Account Number
+  merchantInfo += `02${String(accountNumber.length).padStart(2, '0')}${accountNumber}`;
+  // 26-31 tag with length and value
+  qrData += `26${String(merchantInfo.length).padStart(2, '0')}${merchantInfo}`;
+  
+  // 52: Transaction Amount (in cents, no decimal)
+  const amountInCents = Math.round(amount * 100);
+  qrData += `52${String(amountInCents.toString().length).padStart(2, '0')}${amountInCents}`;
+  
+  // 53: Transaction Currency (704 = VND)
+  qrData += '5303704';
+  
+  // 58: Merchant Category Code (5899 = Miscellaneous)
+  qrData += '58045899';
+  
+  // 59: Merchant City (Saigon)
+  qrData += '5906SAIGON';
+  
+  // 60: Merchant Name
+  const merchantName = 'NGUYEN QUACH PHU TAI';
+  qrData += `60${String(merchantName.length).padStart(2, '0')}${merchantName}`;
+  
+  // 62: Additional Data (Bill Number/Reference)
+  if (content) {
+    const additionalData = `01${String(content.length).padStart(2, '0')}${content}`;
+    qrData += `62${String(additionalData.length).padStart(2, '0')}${additionalData}`;
+  }
+  
+  // 63: CRC (Cyclic Redundancy Check)
+  const crc = calculateCRC(qrData);
+  qrData += `6304${crc}`;
+  
+  return qrData;
+}
+
+// Calculate CRC16-CCITT for EMVCo QR
+function calculateCRC(data) {
+  let crc = 0xFFFF;
+  
+  for (let i = 0; i < data.length; i++) {
+    crc ^= data.charCodeAt(i);
+    
+    for (let j = 0; j < 8; j++) {
+      if (crc & 0x0001) {
+        crc = (crc >> 1) ^ 0x8408;
+      } else {
+        crc = crc >> 1;
+      }
+    }
+  }
+  
+  return (crc ^ 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
 }
 
 function verifyApiKey(deviceId, apiKey) {

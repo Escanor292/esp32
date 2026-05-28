@@ -266,6 +266,8 @@ function mapOrderRow(row) {
     payment_gateway: row.payment_gateway || null,
     bank_reference_id: row.bank_reference_id || null,
     confirmed_at: row.confirmed_at,
+    kitchen_status: row.kitchen_status || 'pending',
+    completed_at: row.completed_at,
     created_at: row.created_at
   };
 }
@@ -311,6 +313,8 @@ async function initDatabaseTables() {
       webhook_content TEXT,
       webhook_reference_code TEXT,
       confirmed_at TIMESTAMPTZ,
+      kitchen_status TEXT DEFAULT 'pending',
+      completed_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
 
@@ -331,6 +335,18 @@ async function initDatabaseTables() {
       ('store_003', 'Quầy Mang Về (Takeaway)', 'offline', '{"model":"ESP32-DevKit"}')
     ON CONFLICT (id) DO NOTHING;
   `);
+
+  // Add kitchen_status and completed_at columns if they don't exist (migration)
+  try {
+    await pool.query(`
+      ALTER TABLE orders
+      ADD COLUMN IF NOT EXISTS kitchen_status TEXT DEFAULT 'pending',
+      ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ
+    `);
+    console.log('✅ Migration: Added kitchen_status and completed_at columns to orders table');
+  } catch (err) {
+    console.log('ℹ️ Migration columns may already exist:', err.message);
+  }
 }
 
 let useFallback = false;
@@ -1091,11 +1107,12 @@ async function handleSepayWebhook(req, res) {
                    payment_gateway = $1,
                    bank_reference_id = $2,
                    webhook_content = $3,
-                   webhook_reference_code = $4
+                   webhook_reference_code = $4,
+                   kitchen_status = 'pending'
                WHERE id = $5`,
               [payload.gateway || 'SEPAY', String(payload.id || ''), rawContent, rawRef, order.id]
             );
-            console.log(`✅ Order ${order.id} auto-confirmed in PostgreSQL via webhook`);
+            console.log(`✅ Order ${order.id} auto-confirmed in PostgreSQL via webhook (kitchen_status set to pending)`);
             break;
           }
         }
@@ -1160,7 +1177,8 @@ async function handleSepayWebhook(req, res) {
       pendingOrder.bank_reference_id = String(payload.id || '');
       pendingOrder.webhook_content = rawContent;
       pendingOrder.webhook_reference_code = rawRef;
-      console.log(`✅ Order ${pendingOrder.id} auto-confirmed via webhook`);
+      pendingOrder.kitchen_status = 'pending';
+      console.log(`✅ Order ${pendingOrder.id} auto-confirmed via webhook (kitchen_status set to pending)`);
     }
 
     saveFallback();
@@ -1367,7 +1385,84 @@ app.get('/api/v1/orders/:order_id', async (req, res) => {
   }
 });
 
-// 0e. Sales Stats
+// 0e. Kitchen Orders - Get pending kitchen orders
+app.get('/api/v1/kitchen/orders', async (req, res) => {
+  try {
+    if (await canUseDatabase()) {
+      try {
+        const result = await pool.query(
+          `SELECT * FROM orders
+           WHERE status = 'confirmed' AND kitchen_status = 'pending'
+           ORDER BY confirmed_at ASC`
+        );
+        return res.json(result.rows.map(mapOrderRow));
+      } catch (dbError) {
+        console.error('⚠️ Get kitchen orders from PostgreSQL failed, using fallback:', dbError.message);
+        databaseConnected = false;
+        useFallback = true;
+      }
+    }
+
+    const kitchenOrders = (dbFallback.orders || []).filter(
+      o => o.status === 'confirmed' && o.kitchen_status === 'pending'
+    );
+    kitchenOrders.sort((a, b) => new Date(a.confirmed_at) - new Date(b.confirmed_at));
+
+    return res.json(kitchenOrders);
+  } catch (error) {
+    console.error('Get kitchen orders error:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// 0f. Kitchen Orders - Complete order
+app.patch('/api/v1/kitchen/orders/:id', async (req, res) => {
+  try {
+    const { kitchen_status } = req.body;
+
+    if (kitchen_status !== 'completed') {
+      return res.status(400).json({ error: 'Invalid kitchen_status' });
+    }
+
+    if (await canUseDatabase()) {
+      try {
+        const result = await pool.query(
+          `UPDATE orders
+           SET kitchen_status = $1, completed_at = NOW()
+           WHERE id = $2
+           RETURNING *`,
+          [kitchen_status, req.params.id]
+        );
+
+        if (result.rows.length > 0) {
+          return res.json({ order: mapOrderRow(result.rows[0]) });
+        }
+        return res.status(404).json({ error: 'Order not found' });
+      } catch (dbError) {
+        console.error('⚠️ Update kitchen order in PostgreSQL failed, using fallback:', dbError.message);
+        databaseConnected = false;
+        useFallback = true;
+      }
+    }
+
+    const order = (dbFallback.orders || []).find(o => o.id === req.params.id);
+
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    order.kitchen_status = kitchen_status;
+    order.completed_at = new Date().toISOString();
+    saveFallback();
+
+    return res.json({ order });
+  } catch (error) {
+    console.error('Update kitchen order error:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// 0g. Sales Stats
 app.get('/api/v1/orders/stats/summary', async (req, res) => {
   try {
     const { period, date } = req.query;
