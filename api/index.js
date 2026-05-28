@@ -1990,6 +1990,36 @@ app.post('/api/init-db', async (req, res) => {
   }
 });
 
+// Debug endpoint for VietQR generation
+app.get('/api/debug-vietqr', async (req, res) => {
+  try {
+    const amount = Number(req.query.amount) || 6600;
+    const code = req.query.code || 'ORDER_TEST';
+    const bankCode = 'MBBank';
+    const accountNumber = '0932299701';
+
+    const qrData = generateVietQRData(bankCode, accountNumber, amount, code);
+    const crc = calculateCRC(qrData.substring(0, qrData.length - 4)); // CRC of data without CRC field
+
+    res.json({
+      amount,
+      code,
+      bankCode,
+      accountNumber,
+      qrData,
+      qrDataLength: qrData.length,
+      crc,
+      sepayUrl: `https://qr.sepay.vn/img?acc=${accountNumber}&bank=${bankCode}&amount=${amount}&des=${encodeURIComponent(code)}&template=compact`
+    });
+  } catch (error) {
+    console.error('Debug VietQR error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // ============ HELPER FUNCTIONS ============
 
 function generateTransactionCode() {
@@ -1998,8 +2028,12 @@ function generateTransactionCode() {
   return `TXN${timestamp}${random}`;
 }
 
-// Generate VietQR/EMVCo standard QR data string
+// Generate VietQR/EMVCo standard QR data string using SePay API format
 function generateVietQRData(bankCode, accountNumber, amount, content) {
+  // Use SePay API to generate proper VietQR data
+  // SePay format: https://qr.sepay.vn/img?acc=0932299701&bank=MBBank&amount=6600&des=ORDER_TEST&template=compact
+  // For ESP32, we need the raw EMVCo QR data string, not the image URL
+  
   // Bank BIN mapping for Vietnam banks
   const bankBINs = {
     'MBBank': '970422',
@@ -2029,7 +2063,7 @@ function generateVietQRData(bankCode, accountNumber, amount, content) {
 
   const bin = bankBINs[bankCode] || '970422'; // Default to MBBank if not found
 
-  // Build EMVCo QR data following VietQR standard
+  // Build EMVCo QR data following VietQR/Napas standard
   // Format: Tag-Length-Value (TLV)
   
   let qrData = '';
@@ -2040,18 +2074,18 @@ function generateVietQRData(bankCode, accountNumber, amount, content) {
   // 01: Point of Initiation Method (12 = dynamic with amount)
   qrData += '010212';
   
-  // 26-31: Merchant Account Information (Consumer Data)
+  // 26-31: Merchant Account Information (Consumer Data for Vietnam)
   let merchantInfo = '';
   // 00: Global Unique Identifier (VietQR: VN VNPay)
   merchantInfo += '0006VN VNPay';
-  // 01: Bank BIN
+  // 01: Bank BIN (Consumer Account Information)
   merchantInfo += `01${String(bin.length).padStart(2, '0')}${bin}`;
   // 02: Account Number
   merchantInfo += `02${String(accountNumber.length).padStart(2, '0')}${accountNumber}`;
   // 26-31 tag with length and value
   qrData += `26${String(merchantInfo.length).padStart(2, '0')}${merchantInfo}`;
   
-  // 52: Transaction Amount (in cents, no decimal)
+  // 52: Transaction Amount (in smallest currency unit, no decimal)
   const amountInCents = Math.round(amount * 100);
   qrData += `52${String(amountInCents.toString().length).padStart(2, '0')}${amountInCents}`;
   
