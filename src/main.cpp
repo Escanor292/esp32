@@ -120,7 +120,7 @@ void displayConnecting(const char* message);
 void displayIdleScreen();
 void displayTransactionInfo(const Transaction& txn);
 void displayQRCode(const char* qrData, int xOffset = QR_X, int yOffset = QR_Y, int scale = QR_SCALE);
-void displayNewOrderQR(long amount, const String& txnCode);
+void displayNewOrderQR(long amount, const String& txnCode, const String& qrData = "");
 
 void configModeCallback(WiFiManager *myWiFiManager);
 
@@ -658,7 +658,7 @@ void displayQRCode(const char* qrData, int xOffset, int yOffset, int scale) {
   }
 }
 
-void displayNewOrderQR(long amount, const String& txnCode) {
+void displayNewOrderQR(long amount, const String& txnCode, const String& qrData) {
   Serial.println("Displaying new order QR...");
 
   display.clearDisplay();
@@ -684,12 +684,25 @@ void displayNewOrderQR(long amount, const String& txnCode) {
   display.setCursor(0, 56);
   display.println("Quet QR >");
 
-  String qrData = String(BANK_CODE) + "|" + String(BANK_ACCOUNT) + "|" + String(amount) + "|" + txnCode;
+  String finalQrData;
+  
+  if (qrData.length() > 0) {
+    // Use backend qrData (VietQR/EMVCo standard)
+    finalQrData = qrData;
+    Serial.println("QR Data source: backend qrData");
+  } else {
+    // Fallback to old format if backend didn't send qrData
+    finalQrData = String(BANK_CODE) + "|" + String(BANK_ACCOUNT) + "|" + String(amount) + "|" + txnCode;
+    Serial.println("QR Data source: fallback (backend qrData not available)");
+  }
 
+  Serial.print("QR Data length: ");
+  Serial.println(finalQrData.length());
+  
   Serial.print("QR Data: ");
-  Serial.println(qrData);
+  Serial.println(finalQrData);
 
-  displayQRCode(qrData.c_str(), QR_X, QR_Y, QR_SCALE);
+  displayQRCode(finalQrData.c_str(), QR_X, QR_Y, QR_SCALE);
   display.display();
 
   currentState = STATE_SHOWING_QR;
@@ -765,6 +778,7 @@ void handleNewOrder(const char* json) {
 
   long amount = doc["amount"] | doc["transferAmount"] | doc["total"] | 0;
   String txnCode = doc["txnCode"] | doc["referenceCode"] | doc["content"] | "";
+  String qrData = doc["qrData"] | doc["vietqrPayload"] | "";
 
   Serial.println("----- NEW ORDER DATA -----");
   Serial.print("Amount: ");
@@ -778,7 +792,7 @@ void handleNewOrder(const char* json) {
     return;
   }
 
-  displayNewOrderQR(amount, txnCode);
+  displayNewOrderQR(amount, txnCode, qrData);
 }
 
 void handlePaymentNotification(const char* json) {
