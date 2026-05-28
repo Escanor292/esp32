@@ -1206,9 +1206,7 @@ app.post('/api/v1/orders', async (req, res) => {
     const txnCode = `ORDER_${Date.now().toString(36).toUpperCase()}`;
 
     // Generate VietQR/EMVCo standard QR data
-    const bankCode = 'MBBank';
-    const accountNumber = '0932299701';
-    const qrData = generateVietQRData(bankCode, accountNumber, total, txnCode);
+    const qrData = generateVietQRData(total, txnCode);
 
     let newOrder = {
       id: orderId,
@@ -1995,11 +1993,9 @@ app.get('/api/debug-vietqr', async (req, res) => {
   try {
     const amount = Number(req.query.amount) || 6600;
     const code = req.query.code || 'ORDER_TEST';
-    const bankCode = 'MBBank';
-    const accountNumber = '0932299701';
 
-    const qrData = generateVietQRData(bankCode, accountNumber, amount, code);
-    const crc = calculateCRC(qrData.substring(0, qrData.length - 4)); // CRC of data without CRC field
+    const qrData = generateVietQRData(amount, code);
+    const crc = qrData.substring(qrData.length - 4); // Last 4 chars are CRC
 
     res.json({
       amount,
@@ -2025,110 +2021,73 @@ function generateTransactionCode() {
   return `TXN${timestamp}${random}`;
 }
 
-// Generate VietQR/EMVCo compact QR data string following Napas standard
-function generateVietQRData(bankCode, accountNumber, amount, content) {
-  // VietQR Compact Format (Napas Standard)
-  // Minimal payload for IBFT (Interbank Funds Transfer)
-  // Structure:
-  // 00: Payload Format Indicator
-  // 01: Point of Initiation Method
-  // 38: Merchant Account Information (GUID A000000727 for NAPAS)
-  // 53: Currency Code (704 = VND)
-  // 54: Transaction Amount
-  // 58: Country Code (VN)
-  // 62: Additional Data Field Template (Bill Number/Reference)
-  // 63: CRC16-CCITT
-  
-  // Bank BIN mapping for Vietnam banks
-  const bankBINs = {
-    'MBBank': '970422',
-    'VCB': '970436',
-    'TCB': '970403',
-    'STB': '970443',
-    'ACB': '970448',
-    'VTB': '970418',
-    'BIDV': '970432',
-    'AGRIBANK': '970405',
-    'VIB': '970441',
-    'OCB': '970448',
-    'TPB': '970423',
-    'MSB': '970426',
-    'NAB': '970415',
-    'CIMB': '970431',
-    'KB': '970438',
-    'SHB': '970444',
-    'SAIGONBANK': '970437',
-    'BACABANK': '970419',
-    'KEP': '970429',
-    'PB': '970428',
-    'VIETCAPITAL': '970452',
-    'OCEAN': '970414',
-    'CBB': '970421'
-  };
-
-  const bin = bankBINs[bankCode] || '970422'; // Default to MBBank if not found
-
-  let qrData = '';
-  
-  // 00: Payload Format Indicator (01 = EMVCo)
-  qrData += '000201';
-  
-  // 01: Point of Initiation Method (12 = dynamic with amount)
-  qrData += '010212';
-  
-  // 38: Merchant Account Information (Consumer Data for NAPAS)
-  let merchantInfo = '';
-  // 00: Global Unique Identifier (A000000727 = NAPAS Vietnam)
-  merchantInfo += '0016A000000727';
-  // 01: Bank BIN
-  merchantInfo += `01${String(bin.length).padStart(2, '0')}${bin}`;
-  // 02: Account Number
-  merchantInfo += `02${String(accountNumber.length).padStart(2, '0')}${accountNumber}`;
-  // 03: Service Code (QRIBFTTA = QR IBFT Transfer Account)
-  merchantInfo += '0308QRIBFTTA';
-  // 38 tag with length and value
-  qrData += `38${String(merchantInfo.length).padStart(2, '0')}${merchantInfo}`;
-  
-  // 53: Transaction Currency (704 = VND)
-  qrData += '5303704';
-  
-  // 54: Transaction Amount (in smallest currency unit, no decimal)
-  const amountInCents = Math.round(amount * 100);
-  qrData += `54${String(amountInCents.toString().length).padStart(2, '0')}${amountInCents}`;
-  
-  // 58: Country Code (VN)
-  qrData += '5802VN';
-  
-  // 62: Additional Data Field Template (Bill Number/Reference)
-  if (content) {
-    const additionalData = `01${String(content.length).padStart(2, '0')}${content}`;
-    qrData += `62${String(additionalData.length).padStart(2, '0')}${additionalData}`;
-  }
-  
-  // 63: CRC16-CCITT
-  const crc = calculateCRC(qrData);
-  qrData += `6304${crc}`;
-  
-  return qrData;
+// TLV helper function for EMVCo QR
+function tlv(id, value) {
+  const v = String(value || '');
+  return id + String(v.length).padStart(2, '0') + v;
 }
 
-// Calculate CRC16-CCITT for EMVCo QR
+// Generate VietQR/EMVCo compact QR data string following Napas standard
+function generateVietQRData(amount, code) {
+  const bankBin = '970422';
+  const accountNumber = '0932299701';
+  const serviceCode = 'QRIBFTTA';
+
+  // Consumer Account Information (nested in tag 01 of Merchant Account Info)
+  const consumerAccountInfo =
+    tlv('00', bankBin) +
+    tlv('01', accountNumber);
+
+  // Merchant Account Information (tag 38)
+  const merchantAccountInfo =
+    tlv('00', 'A000000727') +
+    tlv('01', consumerAccountInfo) +
+    tlv('02', serviceCode);
+
+  // Clean amount (no multiplication by 100)
+  const cleanAmount = String(Math.round(Number(amount)));
+
+  // Additional Data Field Template (tag 62) - use subtag 08 for transfer content
+  const additionalData =
+    tlv('08', code);
+
+  // Build payload
+  const payload =
+    tlv('00', '01') +
+    tlv('01', '12') +
+    tlv('38', merchantAccountInfo) +
+    tlv('53', '704') +
+    tlv('54', cleanAmount) +
+    tlv('58', 'VN') +
+    tlv('62', additionalData);
+
+  // Calculate CRC on payload + '6304'
+  const dataForCrc = payload + '6304';
+  const crc = calculateCRC(dataForCrc);
+
+  return dataForCrc + crc;
+}
+
+// Calculate CRC16-CCITT/FALSE for EMVCo QR
+// Initial value: 0xFFFF
+// Polynomial: 0x1021
+// Output: uppercase hex 4 characters
 function calculateCRC(data) {
   let crc = 0xFFFF;
   
   for (let i = 0; i < data.length; i++) {
-    crc ^= data.charCodeAt(i);
+    crc ^= (data.charCodeAt(i) << 8);
     
     for (let j = 0; j < 8; j++) {
-      if (crc & 0x0001) {
-        crc = (crc >> 1) ^ 0x8408;
+      if (crc & 0x8000) {
+        crc = (crc << 1) ^ 0x1021;
       } else {
-        crc = crc >> 1;
+        crc = crc << 1;
       }
     }
   }
   
-  return (crc ^ 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
+  return (crc & 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
 }
 
 function verifyApiKey(deviceId, apiKey) {
