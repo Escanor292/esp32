@@ -55,7 +55,7 @@ const char* BANK_NAME = "NGUYEN QUACH PHU TAI";
 #define LED_PIN 2
 
 // QR config
-#define QR_VERSION 3
+#define QR_VERSION 10
 #define QR_SCALE 2
 #define QR_X 66
 #define QR_Y 3
@@ -635,24 +635,43 @@ void displayTransactionInfo(const Transaction& txn) {
   display.display();
 }
 
-void displayQRCode(const char* qrData, int xOffset, int yOffset, int scale) {
+void displayQRCode(const char* text, int xOffset, int yOffset, int scale) {
+  if (!text || strlen(text) == 0) {
+    Serial.println("QR text empty");
+    return;
+  }
+
+  int len = strlen(text);
+  Serial.print("QR Data length: ");
+  Serial.println(len);
+
+  const uint8_t qrVersion = QR_VERSION;
+  uint8_t qrcodeData[qrcode_getBufferSize(qrVersion)];
   QRCode qrcode;
-  uint8_t qrcodeData[qrcode_getBufferSize(QR_VERSION)];
 
-  qrcode_initText(&qrcode, qrcodeData, QR_VERSION, ECC_LOW, qrData);
+  qrcode_initText(&qrcode, qrcodeData, qrVersion, ECC_LOW, text);
 
+  Serial.print("QR Version: ");
+  Serial.println(qrVersion);
   Serial.print("QR size: ");
   Serial.println(qrcode.size);
 
-  for (uint8_t y = 0; y < qrcode.size; y++) {
-    for (uint8_t x = 0; x < qrcode.size; x++) {
-      int px = xOffset + x * scale;
-      int py = yOffset + y * scale;
+  int qrPixelSize = qrcode.size * scale;
+  if (qrPixelSize > 128) {
+    Serial.println("WARNING: QR too wide for display");
+  }
 
-      if (qrcode_getModule(&qrcode, x, y)) {
-        display.fillRect(px, py, scale, scale, SSD1306_WHITE);
-      } else {
-        display.fillRect(px, py, scale, scale, SSD1306_BLACK);
+  Serial.print("QR Scale: ");
+  Serial.println(scale);
+  Serial.print("QR X: ");
+  Serial.println(xOffset);
+  Serial.print("QR Y: ");
+  Serial.println(yOffset);
+
+  for (uint8_t qy = 0; qy < qrcode.size; qy++) {
+    for (uint8_t qx = 0; qx < qrcode.size; qx++) {
+      if (qrcode_getModule(&qrcode, qx, qy)) {
+        display.fillRect(xOffset + qx * scale, yOffset + qy * scale, scale, scale, SSD1306_WHITE);
       }
     }
   }
@@ -662,47 +681,68 @@ void displayNewOrderQR(long amount, const String& txnCode, const String& qrData)
   Serial.println("Displaying new order QR...");
 
   display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-
-  display.setCursor(0, 0);
-  display.println("DON HANG");
-
-  display.setCursor(0, 12);
-  display.println("Tien:");
-
-  display.setCursor(0, 22);
-  display.print(formatAmount(amount));
-  display.println("d");
-
-  display.setCursor(0, 36);
-  display.println("Ma:");
-
-  display.setCursor(0, 46);
-  display.println(shortenCode(txnCode, 9));
-
-  display.setCursor(0, 56);
-  display.println("Quet QR >");
 
   String finalQrData;
-  
+
   if (qrData.length() > 0) {
-    // Use backend qrData (VietQR/EMVCo standard)
+    // Use backend qrData (VietQR/EMVCo standard) - full screen QR only
     finalQrData = qrData;
+    Serial.println("QR full screen mode");
     Serial.println("QR Data source: backend qrData");
+    Serial.print("QR Data length: ");
+    Serial.println(finalQrData.length());
+
+    // Calculate QR size and center it
+    int qrSize = qrcode_getBufferSize(QR_VERSION);
+    Serial.print("QR Version: ");
+    Serial.println(QR_VERSION);
+    Serial.print("QR Size: ");
+    Serial.println(qrSize);
+
+    // Center QR on screen (128x64)
+    // QR size in pixels = qrSize * scale (scale = 1)
+    // Center horizontally: (128 - qrSize) / 2
+    // Center vertically: (64 - qrSize) / 2
+    int qrX = (128 - qrSize) / 2;
+    int qrY = (64 - qrSize) / 2;
+
+    // If QR is too wide, center vertically but start from left
+    if (qrX < 0) {
+      qrX = 0;
+      qrY = (64 - qrSize) / 2;
+    }
+
+    displayQRCode(finalQrData.c_str(), qrX, qrY, 1);
   } else {
-    // Fallback to old format if backend didn't send qrData
+    // Fallback to old format if backend didn't send qrData - full screen layout with text
     finalQrData = String(BANK_CODE) + "|" + String(BANK_ACCOUNT) + "|" + String(amount) + "|" + txnCode;
     Serial.println("QR Data source: fallback (backend qrData not available)");
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+
+    display.setCursor(0, 0);
+    display.println("DON HANG");
+
+    display.setCursor(0, 12);
+    display.println("Tien:");
+
+    display.setCursor(0, 22);
+    display.print(formatAmount(amount));
+    display.println("d");
+
+    display.setCursor(0, 36);
+    display.println("Ma:");
+
+    display.setCursor(0, 46);
+    display.println(shortenCode(txnCode, 9));
+
+    display.setCursor(0, 56);
+    display.println("Quet QR >");
+
+    displayQRCode(finalQrData.c_str(), QR_X, QR_Y, QR_SCALE);
   }
 
-  Serial.print("QR Data length: ");
-  Serial.println(finalQrData.length());
-  
-  Serial.print("QR Data: ");
-  Serial.println(finalQrData);
-
-  displayQRCode(finalQrData.c_str(), QR_X, QR_Y, QR_SCALE);
   display.display();
 
   currentState = STATE_SHOWING_QR;

@@ -2004,12 +2004,9 @@ app.get('/api/debug-vietqr', async (req, res) => {
     res.json({
       amount,
       code,
-      bankCode,
-      accountNumber,
       qrData,
       qrDataLength: qrData.length,
-      crc,
-      sepayUrl: `https://qr.sepay.vn/img?acc=${accountNumber}&bank=${bankCode}&amount=${amount}&des=${encodeURIComponent(code)}&template=compact`
+      crc
     });
   } catch (error) {
     console.error('Debug VietQR error:', error);
@@ -2028,11 +2025,19 @@ function generateTransactionCode() {
   return `TXN${timestamp}${random}`;
 }
 
-// Generate VietQR/EMVCo standard QR data string using SePay API format
+// Generate VietQR/EMVCo compact QR data string following Napas standard
 function generateVietQRData(bankCode, accountNumber, amount, content) {
-  // Use SePay API to generate proper VietQR data
-  // SePay format: https://qr.sepay.vn/img?acc=0932299701&bank=MBBank&amount=6600&des=ORDER_TEST&template=compact
-  // For ESP32, we need the raw EMVCo QR data string, not the image URL
+  // VietQR Compact Format (Napas Standard)
+  // Minimal payload for IBFT (Interbank Funds Transfer)
+  // Structure:
+  // 00: Payload Format Indicator
+  // 01: Point of Initiation Method
+  // 38: Merchant Account Information (GUID A000000727 for NAPAS)
+  // 53: Currency Code (704 = VND)
+  // 54: Transaction Amount
+  // 58: Country Code (VN)
+  // 62: Additional Data Field Template (Bill Number/Reference)
+  // 63: CRC16-CCITT
   
   // Bank BIN mapping for Vietnam banks
   const bankBINs = {
@@ -2063,9 +2068,6 @@ function generateVietQRData(bankCode, accountNumber, amount, content) {
 
   const bin = bankBINs[bankCode] || '970422'; // Default to MBBank if not found
 
-  // Build EMVCo QR data following VietQR/Napas standard
-  // Format: Tag-Length-Value (TLV)
-  
   let qrData = '';
   
   // 00: Payload Format Indicator (01 = EMVCo)
@@ -2074,41 +2076,36 @@ function generateVietQRData(bankCode, accountNumber, amount, content) {
   // 01: Point of Initiation Method (12 = dynamic with amount)
   qrData += '010212';
   
-  // 26-31: Merchant Account Information (Consumer Data for Vietnam)
+  // 38: Merchant Account Information (Consumer Data for NAPAS)
   let merchantInfo = '';
-  // 00: Global Unique Identifier (VietQR: VN VNPay)
-  merchantInfo += '0006VN VNPay';
-  // 01: Bank BIN (Consumer Account Information)
+  // 00: Global Unique Identifier (A000000727 = NAPAS Vietnam)
+  merchantInfo += '0016A000000727';
+  // 01: Bank BIN
   merchantInfo += `01${String(bin.length).padStart(2, '0')}${bin}`;
   // 02: Account Number
   merchantInfo += `02${String(accountNumber.length).padStart(2, '0')}${accountNumber}`;
-  // 26-31 tag with length and value
-  qrData += `26${String(merchantInfo.length).padStart(2, '0')}${merchantInfo}`;
-  
-  // 52: Transaction Amount (in smallest currency unit, no decimal)
-  const amountInCents = Math.round(amount * 100);
-  qrData += `52${String(amountInCents.toString().length).padStart(2, '0')}${amountInCents}`;
+  // 03: Service Code (QRIBFTTA = QR IBFT Transfer Account)
+  merchantInfo += '0308QRIBFTTA';
+  // 38 tag with length and value
+  qrData += `38${String(merchantInfo.length).padStart(2, '0')}${merchantInfo}`;
   
   // 53: Transaction Currency (704 = VND)
   qrData += '5303704';
   
-  // 58: Merchant Category Code (5899 = Miscellaneous)
-  qrData += '58045899';
+  // 54: Transaction Amount (in smallest currency unit, no decimal)
+  const amountInCents = Math.round(amount * 100);
+  qrData += `54${String(amountInCents.toString().length).padStart(2, '0')}${amountInCents}`;
   
-  // 59: Merchant City (Saigon)
-  qrData += '5906SAIGON';
+  // 58: Country Code (VN)
+  qrData += '5802VN';
   
-  // 60: Merchant Name
-  const merchantName = 'NGUYEN QUACH PHU TAI';
-  qrData += `60${String(merchantName.length).padStart(2, '0')}${merchantName}`;
-  
-  // 62: Additional Data (Bill Number/Reference)
+  // 62: Additional Data Field Template (Bill Number/Reference)
   if (content) {
     const additionalData = `01${String(content.length).padStart(2, '0')}${content}`;
     qrData += `62${String(additionalData.length).padStart(2, '0')}${additionalData}`;
   }
   
-  // 63: CRC (Cyclic Redundancy Check)
+  // 63: CRC16-CCITT
   const crc = calculateCRC(qrData);
   qrData += `6304${crc}`;
   
