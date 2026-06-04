@@ -106,7 +106,7 @@ bool isPlayingAudio = false;
 bool isIdleScreen = true;
 unsigned long lastIdleAnim = 0;
 int wifiPulseStep = 0;
-int rocketX = 0;
+bool coinFlip = false;
 
 // ============ FUNCTION DECLARATIONS ============
 void initDisplay();
@@ -349,9 +349,10 @@ void initAudio() {
   }
 
   dfPlayer.setTimeOut(500);
-  dfPlayer.volume(20);
+  dfPlayer.volume(30);
   dfPlayer.EQ(DFPLAYER_EQ_NORMAL);
 
+  Serial.println("DFPlayer volume set to 30");
   Serial.println("Audio initialized");
 }
 
@@ -587,20 +588,19 @@ void displayConnecting(const char* message) {
 void displayIdleScreen() {
   isIdleScreen = true;
   wifiPulseStep = 0;
-  rocketX = 0;
+  coinFlip = false;
   drawIdleFrame();
 }
 
 void updateIdleAnimation() {
   if (!isIdleScreen) return;
-  if (millis() - lastIdleAnim < 400) return;
+  if (millis() - lastIdleAnim < 350) return;
   lastIdleAnim = millis();
 
   wifiPulseStep++;
   if (wifiPulseStep > 3) wifiPulseStep = 0;
 
-  rocketX += 6;
-  if (rocketX > 110) rocketX = 0;
+  coinFlip = !coinFlip;
 
   drawIdleFrame();
 }
@@ -611,40 +611,34 @@ void drawIdleFrame() {
 
   // GROUP title
   display.setTextSize(2);
-  display.setCursor(34, 0);
+  display.setCursor(34, 4);
   display.println("GROUP");
 
-  // Connection status
+  // ONLINE status
   display.setTextSize(1);
-  bool wifiOk = (WiFi.status() == WL_CONNECTED);
-  bool mqttOk = mqttClient.connected();
-
-  display.setCursor(0, 20);
-  display.print("WIFI:");
-  if (wifiOk) {
-    display.print("OK");
-  } else {
-    display.print("ERR");
-  }
-
-  display.setCursor(64, 20);
-  display.print("MQTT:");
-  if (mqttOk) {
-    display.print("OK");
-  } else {
-    display.print("ERR");
-  }
+  display.setCursor(38, 24);
+  display.println("ONLINE");
 
   // WiFi pulse animation
-  display.setCursor(0, 32);
-  display.print("WiFi:");
-  for (int i = 0; i <= wifiPulseStep; i++) {
-    display.print(")");
-  }
+  display.setCursor(0, 42);
+  display.print("WiFi ");
+  if (wifiPulseStep == 0) display.print(".");
+  if (wifiPulseStep == 1) display.print(")");
+  if (wifiPulseStep == 2) display.print("))");
+  if (wifiPulseStep == 3) display.print(")))");
 
-  // Rocket animation
-  display.setCursor(rocketX, 48);
-  display.print("^");
+  // Coin animation
+  if (coinFlip) {
+    display.setCursor(104, 42);
+    display.print("$");
+    display.setCursor(112, 42);
+    display.print("o");
+  } else {
+    display.setCursor(106, 44);
+    display.print("o");
+    display.setCursor(114, 40);
+    display.print("$");
+  }
 
   display.display();
 }

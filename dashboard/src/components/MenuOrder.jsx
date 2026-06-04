@@ -105,6 +105,20 @@ export default function MenuOrder() {
     setCurrentOrder(null);
   };
 
+  const handleCancelOrder = async () => {
+    if (currentOrder && currentOrder.id) {
+      try {
+        await api.post(`/orders/${currentOrder.id}/cancel`);
+        console.log('✅ Order cancelled:', currentOrder.id);
+      } catch (err) {
+        console.error('Cancel order error:', err);
+      }
+    }
+    setCheckoutOpen(false);
+    setCart({});
+    setCurrentOrder(null);
+  };
+
   return (
     <Box sx={{ display: 'flex', gap: 2, height: 'calc(100vh - 200px)', minHeight: 500 }}>
       {/* LEFT: Menu */}
@@ -286,7 +300,7 @@ export default function MenuOrder() {
           )}
         </DialogContent>
         <DialogActions sx={{ justifyContent: 'center', pb: 2, gap: 1 }}>
-          <Button variant="outlined" onClick={() => setCheckoutOpen(false)}>Huỷ</Button>
+          <Button variant="outlined" onClick={handleCancelOrder}>Huỷ</Button>
           <Button
             variant="contained"
             color="success"

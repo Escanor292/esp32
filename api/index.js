@@ -268,6 +268,7 @@ function mapOrderRow(row) {
     confirmed_at: row.confirmed_at,
     kitchen_status: row.kitchen_status || 'pending',
     completed_at: row.completed_at,
+    cancelled_at: row.cancelled_at,
     created_at: row.created_at
   };
 }
@@ -336,14 +337,15 @@ async function initDatabaseTables() {
     ON CONFLICT (id) DO NOTHING;
   `);
 
-  // Add kitchen_status and completed_at columns if they don't exist (migration)
+  // Add kitchen_status, completed_at, and cancelled_at columns if they don't exist (migration)
   try {
     await pool.query(`
       ALTER TABLE orders
       ADD COLUMN IF NOT EXISTS kitchen_status TEXT DEFAULT 'pending',
-      ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ
+      ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ
     `);
-    console.log('✅ Migration: Added kitchen_status and completed_at columns to orders table');
+    console.log('✅ Migration: Added kitchen_status, completed_at, and cancelled_at columns to orders table');
   } catch (err) {
     console.log('ℹ️ Migration columns may already exist:', err.message);
   }
@@ -1382,6 +1384,100 @@ app.get('/api/v1/orders/:order_id', async (req, res) => {
   } catch (error) {
     console.error('Get order by ID error:', error.message);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// 0e. Cancel Order - Cancel pending orders only
+app.post('/api/v1/orders/:id/cancel', async (req, res) => {
+  try {
+    const orderId = req.params.id;
+
+    if (await canUseDatabase()) {
+      try {
+        const result = await pool.query(
+          `UPDATE orders
+           SET status = 'cancelled', cancelled_at = NOW()
+           WHERE id = $1 AND status = 'pending'
+           RETURNING *`,
+          [orderId]
+        );
+
+        if (result.rows.length > 0) {
+          console.log('✅ Order cancelled:', orderId);
+          return res.json({
+            success: true,
+            message: 'Order cancelled',
+            order: mapOrderRow(result.rows[0])
+          });
+        } else {
+          // Check if order exists but is not pending
+          const checkResult = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+          if (checkResult.rows.length > 0) {
+            const order = checkResult.rows[0];
+            if (order.status === 'confirmed' || order.status === 'paid') {
+              return res.status(400).json({
+                success: false,
+                error: 'Cannot cancel confirmed or paid orders'
+              });
+            }
+            return res.status(404).json({
+              success: false,
+              error: 'Order not found'
+            });
+          }
+          return res.status(404).json({
+            success: false,
+            error: 'Order not found'
+          });
+        }
+      } catch (dbError) {
+        console.error('⚠️ Cancel order in PostgreSQL failed, using fallback:', dbError.message);
+        databaseConnected = false;
+        useFallback = true;
+      }
+    }
+
+    // Fallback logic
+    const orderIndex = (dbFallback.orders || []).findIndex(o => o.id === orderId);
+
+    if (orderIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        error: 'Order not found'
+      });
+    }
+
+    const order = dbFallback.orders[orderIndex];
+
+    if (order.status !== 'pending') {
+      if (order.status === 'confirmed' || order.status === 'paid') {
+        return res.status(400).json({
+          success: false,
+          error: 'Cannot cancel confirmed or paid orders'
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        error: 'Order cannot be cancelled'
+      });
+    }
+
+    order.status = 'cancelled';
+    order.cancelled_at = new Date().toISOString();
+    saveFallback();
+
+    console.log('✅ Order cancelled (fallback):', orderId);
+    return res.json({
+      success: true,
+      message: 'Order cancelled',
+      order
+    });
+  } catch (error) {
+    console.error('Cancel order error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
   }
 });
 

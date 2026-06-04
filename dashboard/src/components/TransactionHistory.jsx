@@ -32,12 +32,12 @@ function TransactionHistory() {
         api.get('/orders').catch(() => ({ data: { orders: [] } }))
       ]);
       setTransactions(txRes.data.transactions || []);
-      // Filter orders within date range
+      // Filter orders within date range and exclude cancelled orders
       const from = new Date(dateFrom).getTime();
       const to = new Date(dateTo + 'T23:59:59').getTime();
       const filteredOrders = (ordRes.data.orders || []).filter(o => {
         const t = new Date(o.created_at).getTime();
-        return t >= from && t <= to;
+        return t >= from && t <= to && o.status !== 'cancelled';
       });
       setOrders(filteredOrders);
     } catch (error) {
