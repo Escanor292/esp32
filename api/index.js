@@ -337,17 +337,29 @@ async function initDatabaseTables() {
     ON CONFLICT (id) DO NOTHING;
   `);
 
-  // Add kitchen_status, completed_at, and cancelled_at columns if they don't exist (migration)
+  // Add kitchen_status, completed_at, cancelled_at, and payment_reference columns if they don't exist (migration)
   try {
     await pool.query(`
       ALTER TABLE orders
       ADD COLUMN IF NOT EXISTS kitchen_status TEXT DEFAULT 'pending',
       ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
-      ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ
+      ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS payment_reference TEXT
     `);
-    console.log('✅ Migration: Added kitchen_status, completed_at, and cancelled_at columns to orders table');
+    console.log('✅ Migration: Added kitchen_status, completed_at, cancelled_at, and payment_reference columns to orders table');
   } catch (err) {
     console.log('ℹ️ Migration columns may already exist:', err.message);
+  }
+
+  // Add order_id column to transactions table if it doesn't exist (migration)
+  try {
+    await pool.query(`
+      ALTER TABLE transactions
+      ADD COLUMN IF NOT EXISTS order_id TEXT
+    `);
+    console.log('✅ Migration: Added order_id column to transactions table');
+  } catch (err) {
+    console.log('ℹ️ Migration column may already exist:', err.message);
   }
 }
 
@@ -1074,23 +1086,10 @@ async function handleSepayWebhook(req, res) {
 
     if (await canUseDatabase()) {
       try {
-        await pool.query(
-          `INSERT INTO transactions
-            (id, device_id, transaction_code, amount, status, gateway, bank_reference_id, content, reference_code, confirmed_at, created_at)
-           VALUES
-            ($1, $2, $3, $4, 'confirmed', $5, $6, $7, $8, NOW(), NOW())`,
-          [
-            uuidv4(),
-            STORE_ID,
-            txnCode,
-            amount,
-            payload.gateway || 'SEPAY',
-            String(payload.id || ''),
-            rawContent,
-            rawRef
-          ]
-        );
+        const transactionId = uuidv4();
+        let matchedOrderId = null;
 
+        // First, try to match with pending orders
         const pendingResult = await pool.query(
           `SELECT * FROM orders WHERE status = 'pending' ORDER BY created_at DESC LIMIT 100`
         );
@@ -1102,21 +1101,46 @@ async function handleSepayWebhook(req, res) {
           const codeMatched = normalizedOrderCode && normalizedWebhookText.includes(normalizedOrderCode);
 
           if (codeMatched || amountMatched) {
+            matchedOrderId = order.id;
             await pool.query(
               `UPDATE orders
                SET status = 'confirmed',
                    confirmed_at = NOW(),
                    payment_gateway = $1,
                    bank_reference_id = $2,
-                   webhook_content = $3,
-                   webhook_reference_code = $4,
+                   payment_reference = $3,
+                   webhook_content = $4,
+                   webhook_reference_code = $5,
                    kitchen_status = 'pending'
-               WHERE id = $5`,
-              [payload.gateway || 'SEPAY', String(payload.id || ''), rawContent, rawRef, order.id]
+               WHERE id = $6`,
+              [payload.gateway || 'SEPAY', String(payload.id || ''), txnCode, rawContent, rawRef, order.id]
             );
             console.log(`✅ Order ${order.id} auto-confirmed in PostgreSQL via webhook (kitchen_status set to pending)`);
             break;
           }
+        }
+
+        // Insert transaction with order_id if matched
+        await pool.query(
+          `INSERT INTO transactions
+            (id, device_id, transaction_code, amount, status, gateway, bank_reference_id, content, reference_code, order_id, confirmed_at, created_at)
+           VALUES
+            ($1, $2, $3, $4, 'confirmed', $5, $6, $7, $8, $9, NOW(), NOW())`,
+          [
+            transactionId,
+            STORE_ID,
+            txnCode,
+            amount,
+            payload.gateway || 'SEPAY',
+            String(payload.id || ''),
+            rawContent,
+            rawRef,
+            matchedOrderId
+          ]
+        );
+
+        if (matchedOrderId) {
+          console.log(`✅ Transaction ${transactionId} linked to order ${matchedOrderId}`);
         }
       } catch (dbError) {
         console.error('⚠️ SePay PostgreSQL update failed, using fallback:', dbError.message);
@@ -1126,6 +1150,34 @@ async function handleSepayWebhook(req, res) {
     }
 
     if (!dbFallback.transactions) dbFallback.transactions = [];
+
+    if (!dbFallback.orders) dbFallback.orders = [];
+
+    const pendingOrder = dbFallback.orders.find(o => {
+      const orderCode = o.transaction_code || o.txnCode || o.referenceCode || '';
+      const normalizedOrderCode = normalizeOrderText(orderCode);
+
+      const amountMatched = Math.abs(Number(o.total || 0) - amount) < 1;
+      const codeMatched = normalizedOrderCode && normalizedWebhookText.includes(normalizedOrderCode);
+
+      return o.status === 'pending' && (codeMatched || amountMatched);
+    });
+
+    let matchedOrderId = null;
+
+    if (pendingOrder) {
+      pendingOrder.status = 'confirmed';
+      pendingOrder.transaction_code = pendingOrder.transaction_code || txnCode;
+      pendingOrder.confirmed_at = new Date().toISOString();
+      pendingOrder.payment_gateway = payload.gateway || 'SEPAY';
+      pendingOrder.bank_reference_id = String(payload.id || '');
+      pendingOrder.payment_reference = txnCode;
+      pendingOrder.webhook_content = rawContent;
+      pendingOrder.webhook_reference_code = rawRef;
+      pendingOrder.kitchen_status = 'pending';
+      matchedOrderId = pendingOrder.id;
+      console.log(`✅ Order ${pendingOrder.id} auto-confirmed via webhook (kitchen_status set to pending)`);
+    }
 
     const existingTx = dbFallback.transactions.find(t => (
       t.transaction_code === txnCode ||
@@ -1141,6 +1193,7 @@ async function handleSepayWebhook(req, res) {
       existingTx.content = rawContent;
       existingTx.referenceCode = rawRef;
       existingTx.transaction_code = txnCode;
+      existingTx.order_id = matchedOrderId;
       console.log(`✅ Existing transaction ${txnCode} updated to confirmed in fallback DB`);
     } else {
       dbFallback.transactions.push({
@@ -1153,34 +1206,11 @@ async function handleSepayWebhook(req, res) {
         bank_reference_id: String(payload.id || ''),
         content: rawContent,
         referenceCode: rawRef,
+        order_id: matchedOrderId,
         confirmed_at: new Date().toISOString(),
         created_at: new Date().toISOString()
       });
-      console.log(`✅ New transaction ${txnCode} inserted in fallback DB`);
-    }
-
-    if (!dbFallback.orders) dbFallback.orders = [];
-
-    const pendingOrder = dbFallback.orders.find(o => {
-      const orderCode = o.transaction_code || o.txnCode || o.referenceCode || '';
-      const normalizedOrderCode = normalizeOrderText(orderCode);
-
-      const amountMatched = Math.abs(Number(o.total || 0) - amount) < 1;
-      const codeMatched = normalizedOrderCode && normalizedWebhookText.includes(normalizedOrderCode);
-
-      return o.status === 'pending' && (codeMatched || amountMatched);
-    });
-
-    if (pendingOrder) {
-      pendingOrder.status = 'confirmed';
-      pendingOrder.transaction_code = pendingOrder.transaction_code || txnCode;
-      pendingOrder.confirmed_at = new Date().toISOString();
-      pendingOrder.payment_gateway = payload.gateway || 'SEPAY';
-      pendingOrder.bank_reference_id = String(payload.id || '');
-      pendingOrder.webhook_content = rawContent;
-      pendingOrder.webhook_reference_code = rawRef;
-      pendingOrder.kitchen_status = 'pending';
-      console.log(`✅ Order ${pendingOrder.id} auto-confirmed via webhook (kitchen_status set to pending)`);
+      console.log(`✅ New transaction ${txnCode} inserted in fallback DB${matchedOrderId ? ` (linked to order ${matchedOrderId})` : ''}`);
     }
 
     saveFallback();

@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   content TEXT,
   reference_code TEXT,
   description TEXT,
+  order_id TEXT,
   expires_at TIMESTAMPTZ,
   confirmed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
@@ -34,6 +35,7 @@ CREATE TABLE IF NOT EXISTS orders (
   status TEXT DEFAULT 'pending',
   payment_gateway TEXT,
   bank_reference_id TEXT,
+  payment_reference TEXT,
   webhook_content TEXT,
   webhook_reference_code TEXT,
   confirmed_at TIMESTAMPTZ,

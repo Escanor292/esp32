@@ -31,7 +31,9 @@ function TransactionHistory() {
         api.get('/transactions', { params: { date_from: dateFrom, date_to: dateTo } }).catch(() => ({ data: { transactions: [] } })),
         api.get('/orders').catch(() => ({ data: { orders: [] } }))
       ]);
-      setTransactions(txRes.data.transactions || []);
+      // Filter out transactions that have order_id (they're already shown as orders)
+      const filteredTransactions = (txRes.data.transactions || []).filter(t => !t.order_id);
+      setTransactions(filteredTransactions);
       // Filter orders within date range and exclude cancelled orders
       const from = new Date(dateFrom).getTime();
       const to = new Date(dateTo + 'T23:59:59').getTime();

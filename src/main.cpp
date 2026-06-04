@@ -943,12 +943,15 @@ void handleNewOrder(const char* json) {
 }
 
 void handlePaymentNotification(const char* json) {
+  isIdleScreen = false;
+
   StaticJsonDocument<1024> doc;
   DeserializationError error = deserializeJson(doc, json);
 
   if (error) {
     Serial.print("JSON parse error in incoming: ");
     Serial.println(error.c_str());
+    isIdleScreen = true;
     return;
   }
 
@@ -960,11 +963,13 @@ void handlePaymentNotification(const char* json) {
 
   if (amount <= 0) {
     Serial.println("Invalid payment amount, ignored");
+    isIdleScreen = true;
     return;
   }
 
   if (transactionId > 0 && isDuplicateTransaction(transactionId)) {
     Serial.println("Duplicate transaction detected, ignoring");
+    isIdleScreen = true;
     return;
   }
 
@@ -985,9 +990,16 @@ void handlePaymentNotification(const char* json) {
 
   playTransactionAudio(amount);
 
-  delay(5000);
+  delay(2500);
+
   currentState = STATE_IDLE;
+  previousState = STATE_PROCESSING_PAYMENT;
+  isIdleScreen = true;
+  isPlayingAudio = false;
   displayIdleScreen();
+
+  Serial.println("Payment display done, returning to idle");
+  Serial.println("Idle animation resumed");
 }
 
 // ============ AUDIO ============
